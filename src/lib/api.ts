@@ -1,4 +1,17 @@
-import { ChatMessage, ChatMessageDTO, ChatRoom, ChatRoomDTO, CreateChatRoomRequest, EnumRoomType, PageRequest } from "@/types/chat";
+import { 
+  ChatRoomDTO, 
+  ChatMessageDTO, 
+  CreateChatRoomRequest, 
+  EnumRoomType,
+  EnumMessageType,
+  EnumRoomRole,
+  EnumStatus,
+  ParticipantDTO,
+  PageRequest, 
+  MessageStatus,
+  CreateChatRoomDTO,
+  CreatePersonalChatRequest
+} from "@/types/chat";
 import { AuthResponse, LoginRequest, RegisterRequest, User } from "@/types/user";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8080/api';
@@ -77,7 +90,14 @@ export class ApiService {
   }
 
 
-  // Chat Rooms API - matching with Spring Boot endpoints
+  // Users API
+  static async getUserByUsername(username: string): Promise<User> {
+    const params = new URLSearchParams({ username });
+    return this.request<User>(`/users/username?${params}`);
+  }
+
+
+  // Chat Rooms API
   static async getAllChatRooms(): Promise<ChatRoomDTO[]> {
     return this.request<ChatRoomDTO[]>('/rooms');
   }
@@ -90,11 +110,20 @@ export class ApiService {
     return this.request<ChatRoomDTO>(`/rooms/${id}`);
   }
 
-  static async createChatRoom(roomData: CreateChatRoomRequest, currentUserId: number): Promise<ChatRoomDTO> {
+  static async createChatRoom(roomData: CreateChatRoomDTO, currentUserId: number): Promise<ChatRoomDTO> {
     return this.request<ChatRoomDTO>(`/rooms?currentUserId=${currentUserId}`, {
       method: 'POST',
       body: JSON.stringify(roomData),
     });
+  }
+
+  static async createOrFindPersonalChat(otherUserId: number, currentUserId: number): Promise<ChatRoomDTO> {
+    const roomData: CreatePersonalChatRequest = {
+      type: EnumRoomType.PERSONAL,
+      participants: [{ userId: otherUserId }]
+    };
+    
+    return this.createChatRoom(roomData, currentUserId);
   }
 
   static async updateChatRoom(
@@ -119,7 +148,7 @@ export class ApiService {
   }
 
 
-  // Messages API - matching your Spring Boot endpoints
+  // Chat Messages API
   static async getMessageById(id: number): Promise<ChatMessageDTO> {
     return this.request<ChatMessageDTO>(`/messages/${id}`);
   }
@@ -185,6 +214,132 @@ export class ApiService {
       method: 'POST',
       body: JSON.stringify({ chatRoomId, senderId, imageUrl }),
     });
+  }
+
+  // Participants API
+  static async getParticipantById(id: number): Promise<ParticipantDTO> {
+    return this.request<ParticipantDTO>(`/participants/${id}`);
+  }
+
+  static async getParticipantsByChatRoomId(chatRoomId: number): Promise<ParticipantDTO[]> {
+    return this.request<ParticipantDTO[]>(`/participants/room/${chatRoomId}`);
+  }
+
+  static async getParticipantByUserAndChatRoom(userId: number, chatRoomId: number): Promise<ParticipantDTO> {
+    return this.request<ParticipantDTO>(`/participants/user/${userId}/room/${chatRoomId}`);
+  }
+
+  static async getParticipantsByUserId(userId: number): Promise<ParticipantDTO[]> {
+    return this.request<ParticipantDTO[]>(`/participants/user/${userId}`);
+  }
+
+  static async getChatPartners(userId: number): Promise<ParticipantDTO[]> {
+    return this.request<ParticipantDTO[]>(`/participants/user/${userId}/chat-partners`);
+  }
+
+  static async getPersonalChatPartners(userId: number): Promise<ParticipantDTO[]> {
+    return this.request<ParticipantDTO[]>(`/participants/user/${userId}/personal-chat-partners`);
+  }
+
+
+  // Participant Management
+  static async addParticipantToChatRoom(
+    chatRoomId: number, 
+    userId: number, 
+    addedByUserId: number
+  ): Promise<ParticipantDTO> {
+    return this.request<ParticipantDTO>('/participants/add', {
+      method: 'POST',
+      body: JSON.stringify({ chatRoomId, userId, addedByUserId }),
+    });
+  }
+
+  static async removeParticipantFromChatRoom(
+    participantId: number, 
+    removedByUserId: number
+  ): Promise<void> {
+    return this.request<void>(`/participants/${participantId}/remove?removedByUserId=${removedByUserId}`, {
+      method: 'DELETE',
+    });
+  }
+
+  static async updateParticipantRole(
+    participantId: number, 
+    newRole: EnumRoomRole, 
+    updatedByUserId: number
+  ): Promise<ParticipantDTO> {
+    return this.request<ParticipantDTO>(`/participants/${participantId}/role`, {
+      method: 'PUT',
+      body: JSON.stringify({ newRole, updatedByUserId }),
+    });
+  }
+
+  // Status Management
+  static async updateParticipantStatus(
+    participantId: number, 
+    muted?: boolean, 
+    blocked?: boolean
+  ): Promise<ParticipantDTO> {
+    return this.request<ParticipantDTO>(`/participants/${participantId}/status`, {
+      method: 'PUT',
+      body: JSON.stringify({ muted, blocked }),
+    });
+  }
+
+  static async updateLastReadMessageId(
+    userId: number, 
+    chatRoomId: number, 
+    messageId: number
+  ): Promise<ParticipantDTO> {
+    return this.request<ParticipantDTO>('/participants/last-read', {
+      method: 'PUT',
+      body: JSON.stringify({ userId, chatRoomId, messageId }),
+    });
+  }
+
+  static async updateOnlineStatus(userId: number, online: boolean): Promise<ParticipantDTO> {
+    return this.request<ParticipantDTO>('/participants/online-status', {
+      method: 'PUT',
+      body: JSON.stringify({ userId, online }),
+    });
+  }
+
+  static async updateLastSeen(userId: number, lastSeen: string): Promise<ParticipantDTO> {
+    return this.request<ParticipantDTO>('/participants/last-seen', {
+      method: 'PUT',
+      body: JSON.stringify({ userId, lastSeen }),
+    });
+  }
+
+
+  // Message Status API
+  static async createMessageStatus(
+    userId: number, 
+    messageId: number, 
+    status: EnumStatus
+  ): Promise<MessageStatus> {
+    return this.request<MessageStatus>('/message-status', {
+      method: 'POST',
+      body: JSON.stringify({ userId, messageId, status }),
+    });
+  }
+
+  static async updateMessageStatus(
+    userId: number, 
+    messageId: number, 
+    status: EnumStatus
+  ): Promise<MessageStatus> {
+    return this.request<MessageStatus>('/message-status/update', {
+      method: 'PUT',
+      body: JSON.stringify({ userId, messageId, status }),
+    });
+  }
+
+  static async getMessageStatusByUserAndMessage(
+    userId: number, 
+    messageId: number
+  ): Promise<MessageStatus> {
+    return this.request<MessageStatus>(`/message-status/user/${userId}/message/${messageId}`);
   }
 
 

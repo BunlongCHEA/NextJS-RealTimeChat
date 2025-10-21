@@ -1,13 +1,24 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/hooks/useAuth';
 import { ApiService } from '@/lib/api';
-import { ChatRoomDTO, ChatFilter, SearchFilter, EnumRoomType } from '@/types/chat';
-// import { formatMessageTime, truncateMessage } from '@/lib/date-utils';
-import { getChatRoomAvatar, getChatRoomDisplayName, formatMessageTime, truncateMessage, getMessagePreview } from '@/lib/chat-utils';
-import { useChat } from '@/hooks/useChat';
+import { 
+  ChatRoomDTO, 
+  ChatFilter, 
+  SearchFilter, 
+  EnumRoomType,
+  ParticipantDTO
+} from '@/types/chat';
+import { User } from '@/types/user';
+import { 
+  getChatRoomAvatar, 
+  getChatRoomDisplayName, 
+  formatMessageTime, 
+  truncateMessage, 
+  getMessagePreview 
+} from '@/lib/chat-utils';
 import { 
   Bars3Icon, 
   MagnifyingGlassIcon,
@@ -25,26 +36,64 @@ interface ChatSidebarProps {
   onRoomSelect: (roomId: number) => void;
 }
 
+interface SearchResult {
+  type: 'chat' | 'internal_friend' | 'external_friend' | 'channel';
+  data: ChatRoomDTO | ParticipantDTO | User;
+  id: number;
+  name: string;
+  avatar?: string;
+  subtitle?: string;
+}
+
 export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSidebarProps) {
   const { user } = useAuth();
   const router = useRouter();
   const [chatRooms, setChatRooms] = useState<ChatRoomDTO[]>([]);
   const [filteredRooms, setFilteredRooms] = useState<ChatRoomDTO[]>([]);
+  const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [activeFilter, setActiveFilter] = useState<ChatFilter>('ALL');
   const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
   const [searchFilter, setSearchFilter] = useState<SearchFilter>('CHATS');
   const [showMenu, setShowMenu] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [searchLoading, setSearchLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const debounceTimer = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     loadChatRooms();
   }, [user]);
 
+  // Debouncing effect for search query
   useEffect(() => {
-    filterRooms();
-  }, [chatRooms, activeFilter, searchQuery, searchFilter]);
+    // Clear previous timer
+    if (debounceTimer.current) {
+      clearTimeout(debounceTimer.current);
+    }
+
+    // Set new timer for debouncing
+    debounceTimer.current = setTimeout(() => {
+      setDebouncedSearchQuery(searchQuery);
+    }, 1000); // 300ms delay
+
+    // Cleanup function
+    return () => {
+      if (debounceTimer.current) {
+        clearTimeout(debounceTimer.current);
+      }
+    };
+  }, [searchQuery]);
+
+  // Search execution effect
+  useEffect(() => {
+    if (showSearch && debouncedSearchQuery.trim()) {
+      handleSearch();
+    } else {
+      filterRooms();
+    }
+  }, [chatRooms, activeFilter, debouncedSearchQuery, searchFilter, showSearch]);
 
   // Close menu when clicking outside
   useEffect(() => {
@@ -64,6 +113,7 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
     try {
       setLoading(true);
       setError(null);
+      // Use getChatRoomsByUserId for CHATS filter
       const rooms = await ApiService.getChatRoomsByUserId(user.id);
       setChatRooms(rooms);
     } catch (error) {
@@ -75,7 +125,7 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
     }
   };
 
-  const filterRooms = async () => {
+  const filterRooms = () => {
     let filtered = chatRooms;
 
     // Apply chat type filter
@@ -84,61 +134,166 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
       filtered = filtered.filter(room => room.type === EnumRoomType[roomType]);
     }
 
-    // Apply search filter
-    if (searchQuery.trim()) {
-      const query = searchQuery.toLowerCase();
-      
-      try {
-        switch (searchFilter) {
-          case 'CHATS':
-            filtered = filtered.filter(room => {
-              const displayName = getChatRoomDisplayName(room, user!).toLowerCase();
-              return displayName.includes(query) || room.name.toLowerCase().includes(query);
-            });
-            break;
-            
-          case 'MESSAGES':
-            // Search in messages via API
-            const searchResults = await ApiService.searchMessages(query);
-            const roomIdsWithMessages = new Set(searchResults.map(msg => msg.chatRoomId));
-            filtered = filtered.filter(room => roomIdsWithMessages.has(room.id));
-            break;
-            
-          case 'CHANNELS':
-            filtered = filtered.filter(room => 
-              room.type === EnumRoomType.CHANNEL && 
-              room.name.toLowerCase().includes(query)
-            );
-            break;
-            
-          case 'FRIENDS':
-            filtered = filtered.filter(room => {
-              if (room.type === EnumRoomType.PERSONAL && room.participants) {
-                const otherParticipant = room.participants.find(p => p.userId !== user!.id);
-                return otherParticipant?.fullName?.toLowerCase().includes(query) ||
-                       otherParticipant?.username?.toLowerCase().includes(query);
-              }
-              return false;
-            });
-            break;
-            
-          default:
-            filtered = filtered.filter(room => {
-              const displayName = getChatRoomDisplayName(room, user!).toLowerCase();
-              return displayName.includes(query);
-            });
-        }
-      } catch (error) {
-        console.error('Search error:', error);
-        // Fallback to local search
-        filtered = filtered.filter(room => {
-          const displayName = getChatRoomDisplayName(room, user!).toLowerCase();
-          return displayName.includes(query);
-        });
-      }
+    setFilteredRooms(filtered);
+  };
+
+  const handleSearch = async () => {
+    if (!debouncedSearchQuery.trim() || !user) {
+      setSearchResults([]);
+      return;
     }
 
-    setFilteredRooms(filtered);
+    try {
+      setSearchLoading(true);
+      const query = debouncedSearchQuery.toLowerCase();
+      const results: SearchResult[] = [];
+
+      switch (searchFilter) {
+        case 'CHATS':
+          // Search in existing chat rooms
+          const filteredChats = chatRooms.filter(room => {
+            const displayName = getChatRoomDisplayName(room, user).toLowerCase();
+            return displayName.includes(query) || room.name.toLowerCase().includes(query);
+          });
+          
+          results.push(...filteredChats.map(room => ({
+            type: 'chat' as const,
+            data: room,
+            id: room.id,
+            name: getChatRoomDisplayName(room, user),
+            avatar: getChatRoomAvatar(room, user),
+            subtitle: room.lastMessageContent 
+              ? getMessagePreview(room.lastMessageContent, room.lastMessageType!, room.lastMessageAttachmentCount)
+              : 'No messages yet'
+          })));
+          break;
+          
+        case 'MESSAGES':
+          // Search in messages via API
+          try {
+            const searchResults = await ApiService.searchMessages(query);
+            const roomIdsWithMessages = new Set(searchResults.map(msg => msg.chatRoomId));
+            const roomsWithMessages = chatRooms.filter(room => roomIdsWithMessages.has(room.id));
+            
+            results.push(...roomsWithMessages.map(room => ({
+              type: 'chat' as const,
+              data: room,
+              id: room.id,
+              name: getChatRoomDisplayName(room, user),
+              avatar: getChatRoomAvatar(room, user),
+              subtitle: 'Found in messages'
+            })));
+          } catch (error) {
+            console.error('Message search error:', error);
+          }
+          break;
+          
+        case 'FRIENDS':
+          if (query.startsWith('@')) {
+            // Search external users when query starts with @
+            const username = query.substring(1);
+            if (username.trim()) {
+              try {
+                // Use getUserByUsername API for external search
+                const externalUser = await ApiService.getUserByUsername(username);
+                
+                // Only add if it's not the current user
+                if (externalUser.id !== user.id) {
+                  results.push({
+                    type: 'external_friend' as const,
+                    data: externalUser,
+                    id: externalUser.id,
+                    name: externalUser.fullName || externalUser.username,
+                    avatar: externalUser.avatarUrl || `https://ui-avatars.com/api/?name=${encodeURIComponent(externalUser.fullName || externalUser.username)}&background=random`,
+                    subtitle: `@${externalUser.username} • External User`
+                  });
+                }
+              } catch (error) {
+                console.error('External user search error:', error);
+                // User not found - this is normal, don't show error to user
+              }
+            }
+          } else {
+            // Search internal friends using getPersonalChatPartners
+            try {
+              const personalPartners = await ApiService.getPersonalChatPartners(user.id);
+              
+              // Filter partners based on search query
+              const filteredPartners = personalPartners.filter(partner => 
+                partner.fullName?.toLowerCase().includes(query) ||
+                partner.username?.toLowerCase().includes(query)
+              );
+              
+              results.push(...filteredPartners.map(partner => ({
+                type: 'internal_friend' as const,
+                data: partner,
+                id: partner.userId,
+                name: partner.fullName || partner.username,
+                avatar: `https://ui-avatars.com/api/?name=${encodeURIComponent(partner.fullName || partner.username)}&background=random`,
+                subtitle: `@${partner.username} • ${partner.online ? 'Online' : 'Offline'}`
+              })));
+            } catch (error) {
+              console.error('Personal chat partners search error:', error);
+            }
+          }
+          break;
+          
+        case 'CHANNELS':
+          const channels = chatRooms.filter(room => 
+            room.type === EnumRoomType.CHANNEL && 
+            room.name.toLowerCase().includes(query)
+          );
+          
+          results.push(...channels.map(room => ({
+            type: 'channel' as const,
+            data: room,
+            id: room.id,
+            name: room.name,
+            avatar: getChatRoomAvatar(room, user),
+            subtitle: `${room.participants?.length || 0} subscribers`
+          })));
+          break;
+      }
+
+      setSearchResults(results);
+    } catch (error) {
+      console.error('Search error:', error);
+      setSearchResults([]);
+    } finally {
+      setSearchLoading(false);
+    }
+  };
+
+  const handleSearchResultClick = async (result: SearchResult) => {
+    if (result.type === 'chat' || result.type === 'channel') {
+      handleRoomClick(result.id);
+    } else if (result.type === 'internal_friend' || result.type === 'external_friend') {
+      try {
+        setSearchLoading(true);
+        // Use createChatRoom API to find or create personal chat
+        const personalChatRoom = await ApiService.createOrFindPersonalChat(result.id, user!.id);
+        
+        // Update local chat rooms if it's a new room
+        const existingRoom = chatRooms.find(room => room.id === personalChatRoom.id);
+        if (!existingRoom) {
+          setChatRooms(prev => [personalChatRoom, ...prev]);
+        }
+        
+        // Navigate to the chat
+        handleRoomClick(personalChatRoom.id);
+        
+        // Clear search
+        setSearchQuery('');
+        setDebouncedSearchQuery('');
+        setSearchResults([]);
+        setShowSearch(false);
+      } catch (error) {
+        console.error('Failed to create/find personal chat:', error);
+        setError(error instanceof Error ? error.message : 'Failed to start chat');
+      } finally {
+        setSearchLoading(false);
+      }
+    }
   };
 
   const getChatTypeIcon = (type: EnumRoomType) => {
@@ -180,13 +335,25 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
     router.push('/settings');
   };
 
+  const handleSearchToggle = () => {
+    setShowSearch(!showSearch);
+    if (showSearch) {
+      setSearchQuery('');
+      setDebouncedSearchQuery('');
+      setSearchResults([]);
+    }
+  };
+
   if (error) {
     return (
       <div className="w-80 bg-gray-50 border-r border-gray-200 flex flex-col h-full">
         <div className="p-4 text-center">
           <div className="text-red-500 text-sm mb-2">Error loading chats</div>
           <button 
-            onClick={loadChatRooms}
+            onClick={() => {
+              setError(null);
+              loadChatRooms();
+            }}
             className="px-4 py-2 bg-blue-500 text-white rounded-lg text-sm hover:bg-blue-600"
           >
             Retry
@@ -195,6 +362,18 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
       </div>
     );
   }
+
+  const displayItems = showSearch && debouncedSearchQuery.trim() ? searchResults : 
+    filteredRooms.map(room => ({
+      type: 'chat' as const,
+      data: room,
+      id: room.id,
+      name: getChatRoomDisplayName(room, user!),
+      avatar: getChatRoomAvatar(room, user!),
+      subtitle: room.lastMessageContent 
+        ? truncateMessage(getMessagePreview(room.lastMessageContent, room.lastMessageType!, room.lastMessageAttachmentCount), 35)
+        : 'No messages yet'
+    }));
 
   return (
     <div className="w-80 bg-gray-50 border-r border-gray-200 flex flex-col h-full">
@@ -251,7 +430,7 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
 
           {/* Search Toggle */}
           <button
-            onClick={() => setShowSearch(!showSearch)}
+            onClick={handleSearchToggle}
             className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
           >
             <MagnifyingGlassIcon className="w-6 h-6 text-gray-600" />
@@ -264,21 +443,32 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
             <div className="relative">
               <input
                 type="text"
-                placeholder="Search..."
+                placeholder={
+                  searchFilter === 'FRIENDS' 
+                    ? 'Search friends or @username for specific user...' 
+                    : searchFilter === 'MESSAGES'
+                    ? 'Search in messages...'
+                    : searchFilter === 'CHANNELS'
+                    ? 'Search channels...'
+                    : 'Search chats...'
+                }
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="w-full pl-8 pr-8 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
               />
               <MagnifyingGlassIcon className="absolute left-2 top-2.5 w-4 h-4 text-gray-400" />
-              <button
-                onClick={() => {
-                  setShowSearch(false);
-                  setSearchQuery('');
-                }}
-                className="absolute right-2 top-2.5 hover:bg-gray-100 rounded"
-              >
-                <XMarkIcon className="w-4 h-4 text-gray-400" />
-              </button>
+              {searchLoading ? (
+                <div className="absolute right-2 top-2.5">
+                  <div className="w-4 h-4 animate-spin rounded-full border-2 border-blue-500 border-t-transparent"></div>
+                </div>
+              ) : (
+                <button
+                  onClick={handleSearchToggle}
+                  className="absolute right-2 top-2.5 hover:bg-gray-100 rounded"
+                >
+                  <XMarkIcon className="w-4 h-4 text-gray-400" />
+                </button>
+              )}
             </div>
 
             {/* Search Filter Tabs */}
@@ -297,46 +487,66 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
                 </button>
               ))}
             </div>
+
+            {/* Search Hints */}
+            {searchFilter === 'FRIENDS' && (
+              <div className="text-xs text-gray-500 px-2">
+                {searchQuery.startsWith('@') ? 
+                  'Searching for specific username...' : 
+                  'Searching in your personal chat partners. Use @username to find specific users.'
+                }
+              </div>
+            )}
           </div>
         )}
 
-        {/* Chat Filter Buttons */}
-        <div className="flex space-x-1 mt-4">
-          {(['ALL', 'PERSONAL', 'GROUP', 'CHANNEL'] as ChatFilter[]).map((filter) => (
-            <button
-              key={filter}
-              onClick={() => setActiveFilter(filter)}
-              className={`flex-1 flex items-center justify-center py-2 px-2 rounded-lg text-xs transition-colors ${
-                activeFilter === filter
-                  ? 'bg-blue-500 text-white'
-                  : 'bg-gray-200 text-gray-600 hover:bg-gray-300'
-              }`}
-            >
-              {filter === 'ALL' && <ChatBubbleLeftRightIcon className="w-4 h-4 mr-1" />}
-              {filter === 'PERSONAL' && <UserIcon className="w-4 h-4 mr-1" />}
-              {filter === 'GROUP' && <UserGroupIcon className="w-4 h-4 mr-1" />}
-              {filter === 'CHANNEL' && <SpeakerWaveIcon className="w-4 h-4 mr-1" />}
-              <span className="hidden sm:inline">
-                {filter === 'ALL' ? 'All' : filter.charAt(0) + filter.slice(1).toLowerCase()}
-              </span>
-            </button>
-          ))}
-        </div>
+        {/* Chat Filter Buttons - Only show when not searching */}
+        {!showSearch && (
+          <div className="flex space-x-1 mt-4">
+            {(['ALL', 'PERSONAL', 'GROUP', 'CHANNEL'] as ChatFilter[]).map((filter) => (
+              <button
+                key={filter}
+                onClick={() => setActiveFilter(filter)}
+                className={`flex-1 flex items-center justify-center py-2 px-2 rounded-lg text-xs transition-colors ${
+                  activeFilter === filter
+                    ? 'bg-blue-500 text-white'
+                    : 'bg-gray-200 text-gray-600 hover:bg-gray-300'
+                }`}
+              >
+                {filter === 'ALL' && <ChatBubbleLeftRightIcon className="w-4 h-4 mr-1" />}
+                {filter === 'PERSONAL' && <UserIcon className="w-4 h-4 mr-1" />}
+                {filter === 'GROUP' && <UserGroupIcon className="w-4 h-4 mr-1" />}
+                {filter === 'CHANNEL' && <SpeakerWaveIcon className="w-4 h-4 mr-1" />}
+                <span className="hidden sm:inline">
+                  {filter === 'ALL' ? 'All' : filter.charAt(0) + filter.slice(1).toLowerCase()}
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
-      {/* Chat Room List */}
+      {/* Content List */}
       <div className="flex-1 overflow-y-auto">
         {loading ? (
           <div className="p-4 text-center text-gray-500">
             <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500 mx-auto mb-2"></div>
             Loading chats...
           </div>
-        ) : filteredRooms.length === 0 ? (
+        ) : displayItems.length === 0 ? (
           <div className="p-4 text-center text-gray-500">
             <div className="mb-2">
-              {searchQuery ? 'No chats found' : 'No chats available'}
+              {showSearch && debouncedSearchQuery ? 
+                (searchFilter === 'FRIENDS' && !debouncedSearchQuery.startsWith('@') ? 
+                  'No personal chat partners found.' : 
+                  searchFilter === 'FRIENDS' && debouncedSearchQuery.startsWith('@') ?
+                  'User not found. Check the username.' :
+                  'No results found'
+                ) : 
+                'No chats available'
+              }
             </div>
-            {!searchQuery && (
+            {!showSearch && !debouncedSearchQuery && (
               <button
                 onClick={() => setShowMenu(true)}
                 className="text-blue-500 hover:text-blue-600 text-sm flex items-center justify-center mx-auto"
@@ -348,84 +558,91 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
           </div>
         ) : (
           <div className="space-y-1">
-            {filteredRooms.map((room) => {
-              const displayName = getChatRoomDisplayName(room, user!);
-              const avatarUrl = getChatRoomAvatar(room, user!);
-              
-              return (
-                <div
-                  key={room.id}
-                  onClick={() => handleRoomClick(room.id)}
-                  className={`p-3 hover:bg-gray-100 cursor-pointer border-l-4 transition-colors ${
-                    selectedRoomId === room.id
-                      ? 'bg-blue-50 border-blue-500'
-                      : 'border-transparent'
-                  }`}
-                >
-                  <div className="flex items-center space-x-3">
-                    {/* Avatar */}
-                    <div className="relative flex-shrink-0">
-                      <img
-                        src={avatarUrl}
-                        alt={displayName}
-                        className="w-12 h-12 rounded-full object-cover"
-                        onError={(e) => {
-                          // Fallback avatar
-                          e.currentTarget.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(displayName)}&background=random`;
-                        }}
-                      />
-                      {room.unreadCount && room.unreadCount > 0 && (
-                        <div className="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
-                          {room.unreadCount > 99 ? '99+' : room.unreadCount}
-                        </div>
-                      )}
-                      {/* Online status for personal chats */}
-                      {room.type === EnumRoomType.PERSONAL && room.participants && (
-                        <div className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 border-2 border-white rounded-full"></div>
+            {displayItems.map((item) => (
+              <div
+                key={`${item.type}-${item.id}`}
+                onClick={() => 
+                  item.type === 'chat' || item.type === 'channel' ? 
+                    handleRoomClick(item.id) : 
+                    handleSearchResultClick(item)
+                }
+                className={`p-3 hover:bg-gray-100 cursor-pointer border-l-4 transition-colors ${
+                  selectedRoomId === item.id && (item.type === 'chat' || item.type === 'channel')
+                    ? 'bg-blue-50 border-blue-500'
+                    : 'border-transparent'
+                } ${searchLoading && (item.type === 'internal_friend' || item.type === 'external_friend') ? 'opacity-50 pointer-events-none' : ''}`}
+              >
+                <div className="flex items-center space-x-3">
+                  {/* Avatar */}
+                  <div className="relative flex-shrink-0">
+                    <img
+                      src={item.avatar}
+                      alt={item.name}
+                      className="w-12 h-12 rounded-full object-cover"
+                      onError={(e) => {
+                        e.currentTarget.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(item.name)}&background=random`;
+                      }}
+                    />
+                    {/* Show indicators based on type */}
+                    {item.type === 'internal_friend' && (
+                      <div className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 border-2 border-white rounded-full"></div>
+                    )}
+                    {item.type === 'external_friend' && (
+                      <div className="absolute bottom-0 right-0 w-3 h-3 bg-blue-400 border-2 border-white rounded-full"></div>
+                    )}
+                    {item.type === 'chat' && (item.data as ChatRoomDTO).type === EnumRoomType.PERSONAL && (
+                      <div className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 border-2 border-white rounded-full"></div>
+                    )}
+                  </div>
+
+                  {/* Content Info */}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between mb-1">
+                      <h3 className="font-medium text-gray-900 truncate text-sm">
+                        {item.name}
+                      </h3>
+                      {item.type === 'chat' && (item.data as ChatRoomDTO).lastMessageTimestamp && (
+                        <span className="text-xs text-gray-500 flex-shrink-0">
+                          {formatMessageTime((item.data as ChatRoomDTO).lastMessageTimestamp!)}
+                        </span>
                       )}
                     </div>
-
-                    {/* Chat Info */}
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center justify-between mb-1">
-                        <h3 className="font-medium text-gray-900 truncate text-sm">
-                          {displayName}
-                        </h3>
-                        {room.lastMessageTimestamp && (
-                          <span className="text-xs text-gray-500 flex-shrink-0">
-                            {formatMessageTime(room.lastMessageTimestamp)}
-                          </span>
-                        )}
+                    <div className="flex items-center">
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm text-gray-500 truncate">
+                          {item.subtitle}
+                        </p>
                       </div>
-                      <div className="flex items-center">
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm text-gray-500 truncate">
-                            {room.lastMessageContent && room.lastMessageType
-                              ? truncateMessage(
-                                  getMessagePreview(
-                                    room.lastMessageContent, 
-                                    room.lastMessageType, 
-                                    room.lastMessageAttachmentCount
-                                  ), 
-                                  35
-                                )
-                              : 'No messages yet'
-                            }
-                          </p>
-                        </div>
-                        {/* Chat type icon */}
-                        <div className="flex-shrink-0 ml-2">
-                          {getChatTypeIcon(room.type)}
-                        </div>
+                      {/* Type indicator */}
+                      <div className="flex-shrink-0 ml-2">
+                        {item.type === 'chat' && getChatTypeIcon((item.data as ChatRoomDTO).type)}
+                        {item.type === 'channel' && <SpeakerWaveIcon className="w-4 h-4 text-gray-400" />}
+                        {item.type === 'internal_friend' && <UserIcon className="w-4 h-4 text-green-500" />}
+                        {item.type === 'external_friend' && <UserIcon className="w-4 h-4 text-blue-400" />}
                       </div>
                     </div>
                   </div>
                 </div>
-              );
-            })}
+              </div>
+            ))}
           </div>
         )}
       </div>
+
+      {/* Error Toast */}
+      {error && (
+        <div className="p-2 bg-red-50 border-t border-red-200">
+          <div className="flex items-center justify-between">
+            <span className="text-red-600 text-xs">{error}</span>
+            <button
+              onClick={() => setError(null)}
+              className="text-red-800 hover:text-red-900"
+            >
+              <XMarkIcon className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

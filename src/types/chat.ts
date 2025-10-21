@@ -60,6 +60,22 @@ export interface ChatRoomDTO {
   unreadCount?: number;
 }
 
+export interface CreateChatRoomDTO {
+  name?: string;
+  type: EnumRoomType;
+  participants?: Array<{
+    userId: number;
+    role?: EnumRoomRole;
+  }>;
+}
+
+export interface CreatePersonalChatRequest {
+  type: EnumRoomType.PERSONAL;
+  participants: Array<{
+    userId: number;
+  }>;
+}
+
 
 export interface ChatMessage {
   id: number;
