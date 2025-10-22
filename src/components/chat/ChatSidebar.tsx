@@ -296,6 +296,8 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
     }
   };
 
+
+  // Helper and functionality methods 
   const getChatTypeIcon = (type: EnumRoomType) => {
     switch (type) {
       case EnumRoomType.PERSONAL:

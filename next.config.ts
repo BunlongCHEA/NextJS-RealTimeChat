@@ -2,7 +2,6 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   /* config options here */
-  output: 'export',        // Enable static export
   distDir: 'out', // Output directory for the static files
   trailingSlash: true,    // Add trailing slashes
   images: {

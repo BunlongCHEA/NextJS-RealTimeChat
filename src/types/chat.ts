@@ -24,26 +24,26 @@ export enum EnumStatus {
   READ = 'READ'
 }
 
-export interface ChatRoom {
-  id: number;
-  name: string;
-  type: EnumRoomType;
-  participants: Participant[];
-  createdUserId?: User;
-  chatMessages?: ChatMessage; // last message
+// export interface ChatRoom {
+//   id: number;
+//   name: string;
+//   type: EnumRoomType;
+//   participants: Participant[];
+//   createdUserId?: User;
+//   chatMessages?: ChatMessage; // last message
   
-  // Transient fields from Spring Boot
-  lastMessageContent?: string;
-  lastMessageSenderUsername?: string;
-  lastMessageTimestamp?: string; // ISO string from Instant
-  lastMessageType?: EnumMessageType;
-  lastMessageAttachmentCount?: number;
-  lastMessageId?: number;
+//   // Transient fields from Spring Boot
+//   lastMessageContent?: string;
+//   lastMessageSenderUsername?: string;
+//   lastMessageTimestamp?: string; // ISO string from Instant
+//   lastMessageType?: EnumMessageType;
+//   lastMessageAttachmentCount?: number;
+//   lastMessageId?: number;
   
-  // Additional frontend fields
-  avatarUrl?: string; // derived from participants or set separately
-  unreadCount?: number; // calculated on frontend
-}
+//   // Additional frontend fields
+//   avatarUrl?: string; // derived from participants or set separately
+//   unreadCount?: number; // calculated on frontend
+// }
 
 export interface ChatRoomDTO {
   id: number;
@@ -56,6 +56,7 @@ export interface ChatRoomDTO {
   lastMessageTimestamp?: string;
   lastMessageType?: EnumMessageType;
   lastMessageAttachmentCount?: number;
+  lastMessageId?: number;
   avatarUrl?: string;
   unreadCount?: number;
 }
@@ -77,25 +78,25 @@ export interface CreatePersonalChatRequest {
 }
 
 
-export interface ChatMessage {
-  id: number;
-  chatRooms: ChatRoom; // matches Spring Boot relationship name
-  sender: User;
-  content: string;
-  type: EnumMessageType;
-  timestamp: string; // ISO string from Instant
-  attachmentUrls: string[];
-  statuses: MessageStatus[];
+// export interface ChatMessage {
+//   id: number;
+//   chatRooms: ChatRoom; // matches Spring Boot relationship name
+//   sender: User;
+//   content: string;
+//   type: EnumMessageType;
+//   timestamp: string; // ISO string from Instant
+//   attachmentUrls: string[];
+//   statuses: MessageStatus[];
   
-  // Transient fields from Spring Boot
-  chatRoomId: number;
-  senderName: string;
+//   // Transient fields from Spring Boot
+//   chatRoomId: number;
+//   senderName: string;
   
-  // Additional frontend helper fields
-  senderUsername?: string;
-  senderFullName?: string;
-  senderAvatarUrl?: string;
-}
+//   // Additional frontend helper fields
+//   senderUsername?: string;
+//   senderFullName?: string;
+//   senderAvatarUrl?: string;
+// }
 
 export interface ChatMessageDTO {
   id: number;
@@ -114,7 +115,7 @@ export interface ChatMessageDTO {
 export interface MessageStatus {
   id: number;
   users: User; // matches Spring Boot relationship name
-  chatMessages: ChatMessage; // matches Spring Boot relationship name
+  chatMessages: ChatMessageDTO; // matches Spring Boot relationship name
   status: EnumStatus;
   timestamp: string; // ISO string from Instant
   
@@ -123,24 +124,24 @@ export interface MessageStatus {
   messageId: number;
 }
 
-export interface Participant {
-  id: number;
-  users: User; // matches Spring Boot relationship name
-  chatRooms: ChatRoom; // matches Spring Boot relationship name
-  role: EnumRoomRole;
-  muted: boolean;
-  blocked: boolean;
-  joinDate: string; // ISO string from Instant
-  lastReadMessageId?: number;
-  online: boolean;
-  lastSeen?: string; // ISO string from Instant
+// export interface Participant {
+//   id: number;
+//   users: User; // matches Spring Boot relationship name
+//   chatRooms: ChatRoom; // matches Spring Boot relationship name
+//   role: EnumRoomRole;
+//   muted: boolean;
+//   blocked: boolean;
+//   joinDate: string; // ISO string from Instant
+//   lastReadMessageId?: number;
+//   online: boolean;
+//   lastSeen?: string; // ISO string from Instant
   
-  // Transient fields from Spring Boot
-  userId: number;
-  chatRoomId: number;
-  username: string;
-  fullName: string;
-}
+//   // Transient fields from Spring Boot
+//   userId: number;
+//   chatRoomId: number;
+//   username: string;
+//   fullName: string;
+// }
 
 export interface ParticipantDTO {
   id: number;

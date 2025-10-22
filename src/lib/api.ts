@@ -179,42 +179,6 @@ export class ApiService {
     });
   }
 
-  static async createImageMessage(
-    chatRoomId: number, 
-    senderId: number, 
-    imageFile: File
-  ): Promise<ChatMessageDTO> {
-    const token = localStorage.getItem('token');
-    const formData = new FormData();
-    formData.append('imageFile', imageFile);
-    
-    const response = await fetch(`${API_BASE_URL}/messages/image?chatRoomId=${chatRoomId}&senderId=${senderId}`, {
-      method: 'POST',
-      headers: {
-        'Authorization': token ? `Bearer ${token}` : '',
-      },
-      body: formData,
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(errorText || 'Failed to send image');
-    }
-
-    const result = await response.json();
-    return result.data || result;
-  }
-
-  static async createImageMessageFromUrl(
-    chatRoomId: number, 
-    senderId: number, 
-    imageUrl: string
-  ): Promise<ChatMessageDTO> {
-    return this.request<ChatMessageDTO>('/messages/image-url', {
-      method: 'POST',
-      body: JSON.stringify({ chatRoomId, senderId, imageUrl }),
-    });
-  }
 
   // Participants API
   static async getParticipantById(id: number): Promise<ParticipantDTO> {

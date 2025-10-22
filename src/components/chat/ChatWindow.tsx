@@ -15,6 +15,7 @@ import {
   PaperClipIcon,
   ChatBubbleLeftRightIcon
 } from '@heroicons/react/24/outline';
+import { WebSocketService } from '@/lib/websocket';
 
 interface ChatWindowProps {
   roomId: number;
@@ -22,23 +23,40 @@ interface ChatWindowProps {
 }
 
 export default function ChatWindow({ roomId, onBack }: ChatWindowProps) {
-  const { user } = useAuth();
+  const { user, loading: authLoading, token } = useAuth(); // Add token from useAuth
   const [chatRoom, setChatRoom] = useState<ChatRoomDTO | null>(null);
   const [messages, setMessages] = useState<ChatMessageDTO[]>([]);
   const [newMessage, setNewMessage] = useState('');
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [wsConnected, setWsConnected] = useState(false);
+  const [wsConnectionAttempted, setWsConnectionAttempted] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const wsService = useRef(WebSocketService.getInstance());
 
   useEffect(() => {
-    if (roomId) {
+    if (roomId && user) {
       loadChatRoom();
       loadMessages();
+      connectWebSocket();
+      
+      // Only attempt WebSocket connection once authentication is confirmed
+      // if (!wsConnectionAttempted) {
+      //   connectWebSocket();
+      //   setWsConnectionAttempted(true);
+      // }
     }
-  }, [roomId]);
+
+    return () => {
+      // Cleanup WebSocket subscription when component unmounts or roomId changes
+      if (wsService.current) {
+        wsService.current.unsubscribeFromRoom(roomId);
+      }
+    };
+  }, [roomId, user, token, authLoading, wsConnectionAttempted]);
 
   useEffect(() => {
     scrollToBottom();
@@ -51,6 +69,59 @@ export default function ChatWindow({ roomId, onBack }: ChatWindowProps) {
       textareaRef.current.style.height = textareaRef.current.scrollHeight + 'px';
     }
   }, [newMessage]);
+
+  const connectWebSocket = async () => {
+    if (!user || !token) {
+      console.log('Skipping WebSocket connection - no user or token');
+      return;
+    }
+
+    try {
+      console.log(`[${new Date().toISOString()}] Starting WebSocket connection for user: ${user.username}`);
+
+      await wsService.current.connect(token);
+      setWsConnected(true);
+      setError(null); // Clear any previous connection errors
+
+      // const token = localStorage.getItem('token');
+      // if (!token) {
+      //   setError('No authentication token found');
+      //   return;
+      // }
+
+      // await wsService.current.connect(token);
+      // setWsConnected(true);
+
+      // Subscribe to room messages
+      wsService.current.subscribeToRoom(roomId, (message: ChatMessageDTO) => {
+        setMessages(prev => {
+          // Avoid duplicates
+          const exists = prev.some(m => m.id === message.id);
+          if (exists) return prev;
+          return [...prev, message];
+        });
+      });
+
+      // Subscribe to error messages
+      wsService.current.subscribeToErrors((errorMessage: string) => {
+        setError(errorMessage);
+      });
+
+      console.log(`[${new Date().toISOString()}] WebSocket connected successfully`);
+
+    } catch (error) {
+      console.error('WebSocket connection failed:', error);
+      setError('Failed to connect to chat server');
+      setWsConnected(false);
+
+      // Retry connection after delay
+      setTimeout(() => {
+        if (user && token) {
+          setWsConnectionAttempted(false); // Allow retry
+        }
+      }, 3000);
+    }
+  };
 
   const loadChatRoom = async () => {
     try {
@@ -83,20 +154,22 @@ export default function ChatWindow({ roomId, onBack }: ChatWindowProps) {
     }
   };
 
+
+  // Helper & Functionality methods
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
   const sendMessage = async () => {
-    if (!newMessage.trim() || sending || !user) return;
+    if (!newMessage.trim() || sending || !user || !wsConnected) return;
 
     const messageContent = newMessage.trim();
     setNewMessage('');
 
     try {
       setSending(true);
-      const message = await ApiService.createTextMessage(roomId, user.id, messageContent);
-      setMessages(prev => [...prev, message]);
+      // Send via WebSocket instead of HTTP API
+      wsService.current.sendTextMessage(roomId, messageContent);
     } catch (error) {
       console.error('Failed to send message:', error);
       setNewMessage(messageContent); // Restore message on error
@@ -115,12 +188,12 @@ export default function ChatWindow({ roomId, onBack }: ChatWindowProps) {
 
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file || !user) return;
+    if (!file || !user || !wsConnected) return;
 
     try {
       setSending(true);
-      const message = await ApiService.createImageMessage(roomId, user.id, file);
-      setMessages(prev => [...prev, message]);
+      // Send via WebSocket instead of HTTP API
+      await wsService.current.sendImageMessage(roomId, file);
     } catch (error) {
       console.error('Failed to send image:', error);
       setError(error instanceof Error ? error.message : 'Failed to send image');
@@ -144,11 +217,9 @@ export default function ChatWindow({ roomId, onBack }: ChatWindowProps) {
         {/* Avatar for non-own messages in group/channel */}
         {!isOwn && chatRoom?.type !== EnumRoomType.PERSONAL && (
           <div className="flex-shrink-0 mr-3">
-            <Image
+            <img
               src={message.senderAvatarUrl || `https://ui-avatars.com/api/?name=${encodeURIComponent(message.senderFullName || message.senderUsername)}&background=random`}
               alt={message.senderFullName || message.senderUsername}
-              width={32}
-              height={32}
               className="w-8 h-8 rounded-full object-cover"
             />
           </div>
@@ -172,12 +243,10 @@ export default function ChatWindow({ roomId, onBack }: ChatWindowProps) {
           {message.type === EnumMessageType.IMAGE && message.attachmentUrls?.length > 0 ? (
             <div>
               {message.attachmentUrls.map((url, index) => (
-                <Image
+                <img
                   key={index}
                   src={url}
                   alt="Shared image"
-                  width={300}
-                  height={200}
                   className="max-w-full rounded mb-2 cursor-pointer hover:opacity-90"
                   onClick={() => window.open(url, '_blank')}
                 />
@@ -231,24 +300,23 @@ export default function ChatWindow({ roomId, onBack }: ChatWindowProps) {
   const getSubtitle = () => {
     if (!chatRoom) return '';
     
+    const wsStatus = wsService.current.getConnectionStatus();
+    let statusIndicator = '';
+    
     if (chatRoom.type === EnumRoomType.PERSONAL && chatRoom.participants) {
       const otherParticipant = chatRoom.participants.find(p => p.userId !== user?.id);
       if (otherParticipant) {
-        return getOnlineStatus(otherParticipant.online, otherParticipant.lastSeen);
+        statusIndicator = getOnlineStatus(otherParticipant.online, otherParticipant.lastSeen);
       }
-    }
-    
-    if (chatRoom.type === EnumRoomType.GROUP) {
+    } else if (chatRoom.type === EnumRoomType.GROUP) {
       const memberCount = chatRoom.participants?.length || 0;
-      return `${memberCount} members`;
-    }
-    
-    if (chatRoom.type === EnumRoomType.CHANNEL) {
+      statusIndicator = `${memberCount} members`;
+    } else if (chatRoom.type === EnumRoomType.CHANNEL) {
       const subscriberCount = chatRoom.participants?.length || 0;
-      return `${subscriberCount} subscribers`;
+      statusIndicator = `${subscriberCount} subscribers`;
     }
     
-    return '';
+    return `${statusIndicator} • ${wsStatus}`;
   };
 
   if (error && !chatRoom) {
@@ -259,8 +327,10 @@ export default function ChatWindow({ roomId, onBack }: ChatWindowProps) {
           <div className="text-gray-500 text-sm mb-4">{error}</div>
           <button
             onClick={() => {
+              setError(null);
               loadChatRoom();
               loadMessages();
+              connectWebSocket();
             }}
             className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600"
           >
@@ -301,11 +371,9 @@ export default function ChatWindow({ roomId, onBack }: ChatWindowProps) {
             )}
             
             {/* Avatar */}
-            <Image
-              src={avatarUrl || `https://ui-avatars.com/api/?name=${encodeURIComponent(displayName)}&background=random`}
+            <img
+              src={avatarUrl}
               alt={displayName}
-              width={40}
-              height={40}
               className="w-10 h-10 rounded-full object-cover flex-shrink-0"
               onError={(e) => {
                 e.currentTarget.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(displayName)}&background=random`;
@@ -315,8 +383,14 @@ export default function ChatWindow({ roomId, onBack }: ChatWindowProps) {
             {/* Chat Info */}
             <div className="min-w-0">
               <h2 className="font-semibold text-gray-900 truncate">{displayName}</h2>
+              {/* And update the WebSocket connection indicator: */}
               <p className="text-sm text-gray-500 truncate">
                 {getSubtitle()}
+                <span className={`ml-2 inline-block w-2 h-2 rounded-full ${
+                  wsConnected ? 'bg-green-500' : 
+                  wsService.current.getConnectionStatus().includes('Reconnecting') ? 'bg-yellow-500' : 
+                  'bg-red-500'
+                }`}></span>
               </p>
             </div>
           </div>
@@ -337,7 +411,7 @@ export default function ChatWindow({ roomId, onBack }: ChatWindowProps) {
         ) : messages.length === 0 ? (
           <div className="text-center text-gray-500 mt-8">
             <div className="mb-4">
-              <ChatBubbleLeftRightIcon className="w-16 h-16 mx-auto text-gray-300" />
+              <PaperAirplaneIcon className="w-16 h-16 mx-auto text-gray-300" />
             </div>
             <h3 className="text-lg font-medium text-gray-400 mb-2">No messages yet</h3>
             <p className="text-sm text-gray-400">Start the conversation!</p>
@@ -368,7 +442,7 @@ export default function ChatWindow({ roomId, onBack }: ChatWindowProps) {
           {/* File upload */}
           <button
             onClick={() => fileInputRef.current?.click()}
-            disabled={sending}
+            disabled={sending || !wsConnected}
             className="p-2 text-gray-600 hover:bg-gray-100 rounded-lg transition-colors disabled:opacity-50"
           >
             <PhotoIcon className="w-6 h-6" />
@@ -388,9 +462,10 @@ export default function ChatWindow({ roomId, onBack }: ChatWindowProps) {
               value={newMessage}
               onChange={(e) => setNewMessage(e.target.value)}
               onKeyPress={handleKeyPress}
-              placeholder="Type your message..."
+              placeholder={wsConnected ? "Type your message..." : "Connecting..."}
               rows={1}
-              className="w-full px-4 py-2 pr-12 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none max-h-32 overflow-y-auto"
+              disabled={!wsConnected}
+              className="w-full px-4 py-2 pr-12 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none max-h-32 overflow-y-auto disabled:bg-gray-100"
               style={{ minHeight: '40px' }}
             />
             
@@ -409,7 +484,7 @@ export default function ChatWindow({ roomId, onBack }: ChatWindowProps) {
           {/* Send button */}
           <button
             onClick={sendMessage}
-            disabled={!newMessage.trim() || sending}
+            disabled={!newMessage.trim() || sending || !wsConnected}
             className="p-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
             {sending ? (

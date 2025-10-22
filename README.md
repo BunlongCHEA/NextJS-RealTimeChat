@@ -48,6 +48,11 @@ npm install @heroicons/react
 ```
 Heroicons are a set of free, open-source SVG icons created by the makers of Tailwind CSS. They are widely used in web development, especially with React and Next.js projects, due to their clean design, ease of use, and compatibility with Tailwind CSS
 
+```bash
+npm install @stomp/stompjs sockjs-client
+```
+@stomp/stompjs is the STOMP client library, and sockjs-client is often used as a fallback for WebSocket connections in older browsers or environments that might not natively support WebSockets.
+
 
 ## Learn More
 
