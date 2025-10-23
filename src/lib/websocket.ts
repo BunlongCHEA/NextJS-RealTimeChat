@@ -138,6 +138,32 @@ export class WebSocketService {
   subscribeToRoom(chatRoomId: number, onMessage: (message: ChatMessageDTO) => void): void {
     if (!this.isConnected || !this.stompClient) {
       console.error(`[${new Date().toISOString()}] WebSocket not connected - cannot subscribe to room ${chatRoomId}`);
+      
+      // Queue the subscription to retry after connection
+      setTimeout(() => {
+        if (this.isConnected && this.stompClient) {
+          this.subscribeToRoom(chatRoomId, onMessage);
+        }
+      }, 1000);
+      return;
+    }
+
+    // Check if client is actually connected (additional safety check)
+    if (!this.stompClient.connected) {
+      console.warn(`[${new Date().toISOString()}] STOMP client not connected - waiting for connection`);
+      
+      // Wait for connection and retry
+      const connectionCheckInterval = setInterval(() => {
+        if (this.stompClient?.connected) {
+          clearInterval(connectionCheckInterval);
+          this.subscribeToRoom(chatRoomId, onMessage);
+        }
+      }, 500);
+      
+      // Clear interval after 10 seconds to prevent infinite waiting
+      setTimeout(() => {
+        clearInterval(connectionCheckInterval);
+      }, 10000);
       return;
     }
 
@@ -177,6 +203,17 @@ export class WebSocketService {
   subscribeToErrors(onError: (error: string) => void): void {
     if (!this.isConnected || !this.stompClient) {
       console.error(`[${new Date().toISOString()}] WebSocket not connected - cannot subscribe to errors`);
+      
+      setTimeout(() => {
+        if (this.isConnected && this.stompClient) {
+          this.subscribeToErrors(onError);
+        }
+      }, 1000);
+      return;
+    }
+
+    if (!this.stompClient.connected) {
+      console.warn(`[${new Date().toISOString()}] STOMP client not connected for error subscription`);
       return;
     }
 
@@ -187,18 +224,25 @@ export class WebSocketService {
       this.subscriptions.get(topic)?.unsubscribe();
     }
 
-    const subscription = this.stompClient.subscribe(topic, (message: IMessage) => {
-      try {
-        const errorMessage = message.body;
-        console.log(`[${new Date().toISOString()}] Received error message:`, errorMessage);
-        onError(errorMessage);
-      } catch (error) {
-        console.error(`[${new Date().toISOString()}] Error parsing error message:`, error);
-      }
-    });
+    try {
+      const subscription = this.stompClient.subscribe(topic, (message: IMessage) => {
+        try {
+          const errorMessage = message.body;
+          console.log(`[${new Date().toISOString()}] Received error message:`, errorMessage);
+          onError(errorMessage);
+        } catch (error) {
+          console.error(`[${new Date().toISOString()}] Error parsing error message:`, error);
+        }
+      });
 
-    this.subscriptions.set(topic, subscription);
-    console.log(`[${new Date().toISOString()}] Subscribed to error messages at ${topic}`);
+      this.subscriptions.set(topic, subscription);
+      console.log(`[${new Date().toISOString()}] Subscribed to error messages at ${topic}`);
+    } catch (error) {
+      console.error(`[${new Date().toISOString()}] Failed to subscribe to errors:`, error);
+    }
+
+    // this.subscriptions.set(topic, subscription);
+    // console.log(`[${new Date().toISOString()}] Subscribed to error messages at ${topic}`);
   }
 
   sendTextMessage(chatRoomId: number, content: string): void {

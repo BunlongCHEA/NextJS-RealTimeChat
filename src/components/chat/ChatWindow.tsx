@@ -209,6 +209,17 @@ export default function ChatWindow({ roomId, onBack }: ChatWindowProps) {
     const isOwn = message.senderId === user?.id;
     const showSender = !isOwn && chatRoom?.type !== EnumRoomType.PERSONAL;
 
+    // Handle system messages differently
+    if (message.type === EnumMessageType.SYSTEM) {
+      return (
+        <div key={message.id} className="flex justify-center mb-2">
+          <div className="bg-gray-100 text-gray-600 text-xs px-3 py-1 rounded-full max-w-xs text-center">
+            {message.content}
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div
         key={message.id}
@@ -273,10 +284,6 @@ export default function ChatWindow({ roomId, onBack }: ChatWindowProps) {
               {message.content && (
                 <div className="mt-2">{message.content}</div>
               )}
-            </div>
-          ) : message.type === EnumMessageType.SYSTEM ? (
-            <div className="text-center italic text-sm opacity-75">
-              {message.content}
             </div>
           ) : (
             <div className="whitespace-pre-wrap">{message.content}</div>

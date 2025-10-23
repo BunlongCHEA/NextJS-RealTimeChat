@@ -30,6 +30,8 @@ import {
   PlusIcon,
   Cog6ToothIcon
 } from '@heroicons/react/24/outline';
+import CreateGroupModal from './CreateGroupModal';
+import CreateChannelModal from './CreateChannelModal';
 
 interface ChatSidebarProps {
   selectedRoomId?: number;
@@ -61,6 +63,8 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
   const [searchLoading, setSearchLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const debounceTimer = useRef<NodeJS.Timeout | null>(null);
+  const [showCreateGroupModal, setShowCreateGroupModal] = useState(false);
+  const [showCreateChannelModal, setShowCreateChannelModal] = useState(false);
 
   useEffect(() => {
     loadChatRooms();
@@ -264,6 +268,7 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
     }
   };
 
+  // Handle clicking on a search result for friends or channels/groups
   const handleSearchResultClick = async (result: SearchResult) => {
     if (result.type === 'chat' || result.type === 'channel') {
       handleRoomClick(result.id);
@@ -311,22 +316,65 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
     }
   };
 
+  // Handle clicking on a chat room
   const handleRoomClick = (roomId: number) => {
     onRoomSelect(roomId);
     router.push(`/chat/${roomId}`);
   };
 
+  // Handle hamburger menu click
   const handleMenuClick = (e: React.MouseEvent) => {
     e.stopPropagation();
     setShowMenu(!showMenu);
   };
 
+  // Handle creating new chat (group/channel)
   const handleCreateNewChat = (type: 'GROUP' | 'CHANNEL') => {
     setShowMenu(false);
-    // TODO: Implement create chat modal
-    console.log(`Create new ${type}`);
+    
+    if (type === 'GROUP') {
+      setShowCreateGroupModal(true);
+    } else if (type === 'CHANNEL') {
+      setShowCreateChannelModal(true);
+    }
   };
 
+  // Handle after group is created
+  const handleGroupCreated = async (groupId: number) => {
+    try {
+      // Close the modal
+      setShowCreateGroupModal(false);
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      // Refresh chat rooms to include the new group
+      await loadChatRooms();
+
+      // Navigate to the new group
+      handleRoomClick(groupId);
+    } catch (error) {
+      console.error('Error handling group creation:', error);
+      setError('Failed to load new group. Please refresh the page.');
+    }
+  };
+
+  const handleChannelCreated = async (channelId: number) => {
+    try {
+      // Close the modal
+      setShowCreateChannelModal(false);
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      // Refresh chat rooms to include the new group
+      await loadChatRooms();
+
+      // Navigate to the new channel
+      handleRoomClick(channelId);
+    } catch (error) {
+      console.error('Error handling channel creation:', error);
+      setError('Failed to load new channel. Please refresh the page.');
+    }
+  };
+
+  // Handle navigating to user profile
   const handleMyProfile = () => {
     setShowMenu(false);
     router.push('/profile');
@@ -366,16 +414,16 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
   }
 
   const displayItems = showSearch && debouncedSearchQuery.trim() ? searchResults : 
-    filteredRooms.map(room => ({
-      type: 'chat' as const,
-      data: room,
-      id: room.id,
-      name: getChatRoomDisplayName(room, user!),
-      avatar: getChatRoomAvatar(room, user!),
-      subtitle: room.lastMessageContent 
-        ? truncateMessage(getMessagePreview(room.lastMessageContent, room.lastMessageType!, room.lastMessageAttachmentCount), 35)
-        : 'No messages yet'
-    }));
+      filteredRooms.map(room => ({
+        type: 'chat' as const,
+        data: room,
+        id: room.id,
+        name: getChatRoomDisplayName(room, user!),
+        avatar: getChatRoomAvatar(room, user!),
+        subtitle: room.lastMessageContent 
+          ? truncateMessage(getMessagePreview(room.lastMessageContent, room.lastMessageType!, room.lastMessageAttachmentCount), 35)
+          : 'No messages yet'
+      }));
 
   return (
     <div className="w-80 bg-gray-50 border-r border-gray-200 flex flex-col h-full">
@@ -644,6 +692,23 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
             </button>
           </div>
         </div>
+      )}
+
+      {/* Render modals */}
+      {showCreateGroupModal && (
+        <CreateGroupModal
+          isOpen={showCreateGroupModal}
+          onClose={() => setShowCreateGroupModal(false)}
+          onGroupCreated={handleGroupCreated}
+        />
+      )}
+
+      {showCreateChannelModal && (
+        <CreateChannelModal
+          isOpen={showCreateChannelModal}
+          onClose={() => setShowCreateChannelModal(false)}
+          onChannelCreated={handleChannelCreated}
+        />
       )}
     </div>
   );
