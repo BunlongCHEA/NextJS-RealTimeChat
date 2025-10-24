@@ -3,8 +3,9 @@
 import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '@/hooks/useAuth';
 import { ApiService } from '@/lib/api';
-import { ChatRoomDTO, ChatMessageDTO, EnumMessageType, EnumRoomType } from '@/types/chat';
+import { ChatRoomDTO, ChatMessageDTO, EnumMessageType, EnumRoomType, EnumRoomRole, ParticipantDTO } from '@/types/chat';
 import { getChatRoomAvatar, getChatRoomDisplayName, formatMessageTime, getOnlineStatus } from '@/lib/chat-utils';
+import { User } from '@/types/user';
 import Image from 'next/image';
 import { 
   PaperAirplaneIcon,
@@ -16,6 +17,8 @@ import {
   ChatBubbleLeftRightIcon
 } from '@heroicons/react/24/outline';
 import { WebSocketService } from '@/lib/websocket';
+import ChatRoomOptionsMenu from './ChatRoomOptionsMenu';
+import router from 'next/router';
 
 interface ChatWindowProps {
   roomId: number;
@@ -36,6 +39,8 @@ export default function ChatWindow({ roomId, onBack }: ChatWindowProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const wsService = useRef(WebSocketService.getInstance());
+  const [showOptionsMenu, setShowOptionsMenu] = useState(false);
+  const [currentUserParticipant, setCurrentUserParticipant] = useState<ParticipantDTO | null>(null); // Fixed type // To store current user's participant info
 
   useEffect(() => {
     if (roomId && user) {
@@ -69,6 +74,15 @@ export default function ChatWindow({ roomId, onBack }: ChatWindowProps) {
       textareaRef.current.style.height = textareaRef.current.scrollHeight + 'px';
     }
   }, [newMessage]);
+
+  // Add useEffect to get current user's participant info
+  useEffect(() => {
+    if (user && chatRoom && chatRoom.participants) {
+      const participant = chatRoom.participants.find(p => p.userId === user.id);
+      setCurrentUserParticipant(participant || null);
+    }
+  }, [user, chatRoom]);
+
 
   const connectWebSocket = async () => {
     if (!user || !token) {
@@ -156,10 +170,13 @@ export default function ChatWindow({ roomId, onBack }: ChatWindowProps) {
 
 
   // Helper & Functionality methods
+
+  // Handle scrolling to bottom 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
+  // Handle sending messages
   const sendMessage = async () => {
     if (!newMessage.trim() || sending || !user || !wsConnected) return;
 
@@ -179,6 +196,7 @@ export default function ChatWindow({ roomId, onBack }: ChatWindowProps) {
     }
   };
 
+  // Handle Enter key press in textarea for sending message
   const handleKeyPress = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
@@ -186,6 +204,7 @@ export default function ChatWindow({ roomId, onBack }: ChatWindowProps) {
     }
   };
 
+  // Handle image upload
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !user || !wsConnected) return;
@@ -203,6 +222,58 @@ export default function ChatWindow({ roomId, onBack }: ChatWindowProps) {
         fileInputRef.current.value = '';
       }
     }
+  };
+
+  // Handle room updates and leaving
+  const handleRoomUpdated = (updatedRoom: ChatRoomDTO) => {
+    setChatRoom(updatedRoom);
+    setShowOptionsMenu(false);
+    
+    loadChatRoom();
+    loadMessages();
+  };
+
+  // Handle leaving the room
+  const handleRoomLeft = () => {
+    setShowOptionsMenu(false);
+
+    try {
+      // Clear current room state
+      setChatRoom(null);
+      setMessages([]);
+
+      // Disconnect from WebSocket for this room
+      if (wsService.current) {
+        wsService.current.unsubscribeFromRoom(roomId);
+      }
+
+      // If onBack function exists (from sidebar), use it to refresh sidebar
+      if (onBack) {
+        onBack();
+        // Wait a moment then navigate to chat list
+        setTimeout(() => {
+          window.location.href = '/chat';
+        }, 300);
+      } 
+
+    } catch (error) {
+      console.error('Error handling room leave:', error);
+      // Fallback: force page refresh
+      window.location.reload();
+    }
+  };
+
+    // Check if user can send messages
+  const canSendMessage = () => {
+    if (!user || !chatRoom || !currentUserParticipant) return false;
+    
+    // For CHANNEL: Only ADMIN can send messages
+    if (chatRoom.type === EnumRoomType.CHANNEL) {
+      return currentUserParticipant.role === EnumRoomRole.ADMIN;
+    }
+    
+    // For PERSONAL and GROUP: All participants can send messages
+    return true;
   };
 
   const renderMessage = (message: ChatMessageDTO) => {
@@ -228,10 +299,12 @@ export default function ChatWindow({ roomId, onBack }: ChatWindowProps) {
         {/* Avatar for non-own messages in group/channel */}
         {!isOwn && chatRoom?.type !== EnumRoomType.PERSONAL && (
           <div className="flex-shrink-0 mr-3">
-            <img
+            <Image
+              alt={message.senderUsername || "group or channel default avatar"}
               src={message.senderAvatarUrl || `https://ui-avatars.com/api/?name=${encodeURIComponent(message.senderFullName || message.senderUsername)}&background=random`}
-              alt={message.senderFullName || message.senderUsername}
-              className="w-8 h-8 rounded-full object-cover"
+              width={32}
+              height={32}
+              className="rounded-full object-cover"
             />
           </div>
         )}
@@ -254,10 +327,12 @@ export default function ChatWindow({ roomId, onBack }: ChatWindowProps) {
           {message.type === EnumMessageType.IMAGE && message.attachmentUrls?.length > 0 ? (
             <div>
               {message.attachmentUrls.map((url, index) => (
-                <img
+                <Image
                   key={index}
                   src={url}
                   alt="Shared image"
+                  width={200}
+                  height={200}
                   className="max-w-full rounded mb-2 cursor-pointer hover:opacity-90"
                   onClick={() => window.open(url, '_blank')}
                 />
@@ -348,7 +423,35 @@ export default function ChatWindow({ roomId, onBack }: ChatWindowProps) {
     );
   }
 
-  if (!chatRoom) {
+  if (authLoading) {
+    return (
+      <div className="flex-1 flex items-center justify-center bg-gray-50">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto mb-4"></div>
+          <div className="text-gray-500">Authenticating...</div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!authLoading && !user) {
+    return (
+      <div className="flex-1 flex items-center justify-center bg-gray-50">
+        <div className="text-center">
+          <div className="text-red-500 text-lg mb-2">Authentication Required</div>
+          <div className="text-gray-500 text-sm mb-4">Please log in to access chat</div>
+          <button
+            onClick={() => window.location.href = '/login'}
+            className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600"
+          >
+            Go to Login
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (loading) {
     return (
       <div className="flex-1 flex items-center justify-center bg-gray-50">
         <div className="text-center">
@@ -359,8 +462,25 @@ export default function ChatWindow({ roomId, onBack }: ChatWindowProps) {
     );
   }
 
+  if (!chatRoom) {
+    return (
+      <div className="flex-1 flex items-center justify-center bg-gray-50">
+        <div className="text-center">
+          <div className="text-gray-500 text-lg mb-2">Chat room not found</div>
+          <div className="text-gray-400 text-sm">The chat room you are looking for does not exist or you do not have access to it.</div>
+        </div>
+      </div>
+    );
+  }
+
   const displayName = getChatRoomDisplayName(chatRoom, user!);
   const avatarUrl = getChatRoomAvatar(chatRoom, user!);
+  
+  // Check if message input should be disabled
+  const isMessageInputDisabled = !canSendMessage();
+  const messageInputPlaceholder = isMessageInputDisabled 
+    ? `Only admins can send messages in this ${chatRoom.type.toLowerCase()}`
+    : 'Type a message...';
 
   return (
     <div className="flex-1 flex flex-col bg-white h-full">
@@ -378,10 +498,12 @@ export default function ChatWindow({ roomId, onBack }: ChatWindowProps) {
             )}
             
             {/* Avatar */}
-            <img
-              src={avatarUrl}
+            <Image
+              src={avatarUrl || `https://ui-avatars.com/api/?name=${encodeURIComponent(displayName)}&background=random`}
               alt={displayName}
-              className="w-10 h-10 rounded-full object-cover flex-shrink-0"
+              width={40}
+              height={40}
+              className="rounded-full object-cover flex-shrink-0"
               onError={(e) => {
                 e.currentTarget.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(displayName)}&background=random`;
               }}
@@ -390,7 +512,6 @@ export default function ChatWindow({ roomId, onBack }: ChatWindowProps) {
             {/* Chat Info */}
             <div className="min-w-0">
               <h2 className="font-semibold text-gray-900 truncate">{displayName}</h2>
-              {/* And update the WebSocket connection indicator: */}
               <p className="text-sm text-gray-500 truncate">
                 {getSubtitle()}
                 <span className={`ml-2 inline-block w-2 h-2 rounded-full ${
@@ -402,9 +523,25 @@ export default function ChatWindow({ roomId, onBack }: ChatWindowProps) {
             </div>
           </div>
 
-          <button className="p-2 hover:bg-gray-100 rounded-lg transition-colors">
-            <EllipsisVerticalIcon className="w-5 h-5 text-gray-600" />
-          </button>
+          {/* Options Menu - Only show for GROUP and CHANNEL */}
+          {chatRoom && (chatRoom.type === EnumRoomType.GROUP || chatRoom.type === EnumRoomType.CHANNEL) && (
+            <div className="relative">
+              <button 
+                onClick={() => setShowOptionsMenu(!showOptionsMenu)}
+                className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+              >
+                <EllipsisVerticalIcon className="w-5 h-5 text-gray-600" />
+              </button>
+
+              <ChatRoomOptionsMenu
+                chatRoom={chatRoom}
+                isOpen={showOptionsMenu}
+                onClose={() => setShowOptionsMenu(false)}
+                onRoomUpdated={handleRoomUpdated}
+                onRoomLeft={handleRoomLeft}
+              />
+            </div>
+          )}
         </div>
       </div>
 
@@ -445,12 +582,23 @@ export default function ChatWindow({ roomId, onBack }: ChatWindowProps) {
 
       {/* Message Input */}
       <div className="p-4 border-t border-gray-200 bg-white flex-shrink-0">
+        {/* Show warning for channels when user can't send messages */}
+        {chatRoom.type === EnumRoomType.CHANNEL && isMessageInputDisabled && (
+          <div className="mb-3 p-3 bg-amber-50 border border-amber-200 rounded-lg">
+            <div className="flex items-center space-x-2 text-amber-800">
+              <div className="text-sm">
+                🔒 Only admins can send messages in this channel
+              </div>
+            </div>
+          </div>
+        )}
+
         <div className="flex items-end space-x-3">
           {/* File upload */}
           <button
             onClick={() => fileInputRef.current?.click()}
-            disabled={sending || !wsConnected}
-            className="p-2 text-gray-600 hover:bg-gray-100 rounded-lg transition-colors disabled:opacity-50"
+            disabled={sending || !wsConnected || isMessageInputDisabled}
+            className="p-2 text-gray-600 hover:bg-gray-100 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <PhotoIcon className="w-6 h-6" />
           </button>
@@ -469,16 +617,17 @@ export default function ChatWindow({ roomId, onBack }: ChatWindowProps) {
               value={newMessage}
               onChange={(e) => setNewMessage(e.target.value)}
               onKeyPress={handleKeyPress}
-              placeholder={wsConnected ? "Type your message..." : "Connecting..."}
+              placeholder={messageInputPlaceholder}
               rows={1}
-              disabled={!wsConnected}
-              className="w-full px-4 py-2 pr-12 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none max-h-32 overflow-y-auto disabled:bg-gray-100"
+              disabled={!wsConnected || isMessageInputDisabled}
+              className="w-full px-4 py-2 pr-12 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none max-h-32 overflow-y-auto disabled:bg-gray-100 disabled:cursor-not-allowed disabled:text-gray-500"
               style={{ minHeight: '40px' }}
             />
             
             {/* Emoji button */}
             <button
-              className="absolute right-3 bottom-2 p-1 text-gray-400 hover:text-gray-600 transition-colors"
+              className="absolute right-3 bottom-2 p-1 text-gray-400 hover:text-gray-600 transition-colors disabled:opacity-50"
+              disabled={isMessageInputDisabled}
               onClick={() => {
                 // TODO: Implement emoji picker
                 console.log('Open emoji picker');
@@ -491,7 +640,7 @@ export default function ChatWindow({ roomId, onBack }: ChatWindowProps) {
           {/* Send button */}
           <button
             onClick={sendMessage}
-            disabled={!newMessage.trim() || sending || !wsConnected}
+            disabled={!newMessage.trim() || sending || !wsConnected || isMessageInputDisabled}
             className="p-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
             {sending ? (

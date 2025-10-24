@@ -17,6 +17,9 @@ import { AuthResponse, LoginRequest, RegisterRequest, User } from "@/types/user"
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8080/api';
 
 export class ApiService {
+  static removeParticipant(id: number, id1: number) {
+      throw new Error('Method not implemented.');
+  }
   private static async request<T>(
     endpoint: string,
     options: RequestInit = {}
@@ -142,7 +145,12 @@ export class ApiService {
     userId: number, 
     deleteForAll: boolean = false
   ): Promise<void> {
-    return this.request<void>(`/rooms/${id}?userId=${userId}&deleteForAll=${deleteForAll}`, {
+    const params = new URLSearchParams({
+      userId: userId.toString(),
+      deleteForAll: deleteForAll.toString(),
+    });
+
+    return this.request<void>(`/rooms/${id}?${params}`, {
       method: 'DELETE',
     });
   }
@@ -212,9 +220,13 @@ export class ApiService {
     userId: number, 
     addedByUserId: number
   ): Promise<ParticipantDTO> {
-    return this.request<ParticipantDTO>('/participants/add', {
+    const params = new URLSearchParams({
+      userId: userId.toString(),
+      addedByUserId: addedByUserId.toString()
+    });
+
+    return this.request<ParticipantDTO>(`/participants/room/${chatRoomId}/add?${params}`, {
       method: 'POST',
-      body: JSON.stringify({ chatRoomId, userId, addedByUserId }),
     });
   }
 
@@ -222,7 +234,11 @@ export class ApiService {
     participantId: number, 
     removedByUserId: number
   ): Promise<void> {
-    return this.request<void>(`/participants/${participantId}/remove?removedByUserId=${removedByUserId}`, {
+    const params = new URLSearchParams({
+      removedByUserId: removedByUserId.toString()
+    });
+
+    return this.request<void>(`/participants/${participantId}?${params}`, {
       method: 'DELETE',
     });
   }
@@ -232,9 +248,14 @@ export class ApiService {
     newRole: EnumRoomRole, 
     updatedByUserId: number
   ): Promise<ParticipantDTO> {
-    return this.request<ParticipantDTO>(`/participants/${participantId}/role`, {
+    const params = new URLSearchParams({
+      newRole,
+      updatedByUserId: updatedByUserId.toString()
+    });
+
+    return this.request<ParticipantDTO>(`/participants/${participantId}/role?${params}`, {
       method: 'PUT',
-      body: JSON.stringify({ newRole, updatedByUserId }),
+      // body: JSON.stringify({ newRole, updatedByUserId }),
     });
   }
 
