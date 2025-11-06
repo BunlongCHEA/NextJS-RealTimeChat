@@ -107,7 +107,7 @@ spec:
       terminationGracePeriodSeconds: 30
 
 ---
-# Secret for Next.js application
+# Secret for Next.js application variables
 apiVersion: v1
 kind: Secret
 metadata:
