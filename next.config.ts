@@ -4,20 +4,19 @@ const nextConfig: NextConfig = {
   // Enable static export for nginx
   // output: 'export',
 
+  // Enable standalone output for Docker (SSR)
+  output: 'standalone',
+
   // Disable React Strict Mode for WebSocket connections
   reactStrictMode: false,
   
   // External packages for server components
   serverExternalPackages: ['@stomp/stompjs', 'sockjs-client'],
-  
-  // // Turbopack configuration for better performance
-  // turbo: {
-  //   rules: {
-  //     '*.sockjs': {
-  //       loaders: ['file-loader'],
-  //     },
-  //   },
-  // },
+
+  // Enable experimental features
+  experimental: {
+    serverComponentsExternalPackages: ['@stomp/stompjs', 'sockjs-client'],
+  },
 
   // Allow WebSocket connections with enhanced headers
   async headers() {
@@ -43,34 +42,55 @@ const nextConfig: NextConfig = {
   },
 
   images: {
-    unoptimized: true, // Disable image optimization for static export
-    remotePatterns: [
-      {
-        protocol: 'https',
-        hostname: 'raw.githubusercontent.com',
-        port: '',
-        pathname: '/**',
-      },
-      {
-        protocol: 'https',
-        hostname: 'example.com',
-        port: '',
-        pathname: '/**',
-      },
-      {
-        protocol: 'https',
-        hostname: 'chatnextjs.bunlong.site',
-        port: '',
-        pathname: '/**',
-      },
-      {
-        protocol: 'https',
-        hostname: 'chatspringboot.bunlong.site',
-        port: '',
-        pathname: '/**',
-      }
-    ],
+    // Enable image optimization
+    domains: ['chatnextjs.bunlong.site', 'chatspringboot.bunlong.site', 'raw.githubusercontent.com', 'example.com'],
+    formats: ['image/webp', 'image/avif'],
+    deviceSizes: [640, 750, 828, 1080, 1200, 1920, 2048, 3840],
+    imageSizes: [16, 32, 48, 64, 96, 128, 256, 384],
   },
+
+  // Webpack configuration
+  webpack: (config, { isServer }) => {
+    if (!isServer) {
+      config.resolve.fallback = {
+        ...config.resolve.fallback,
+        net: false,
+        tls: false,
+        fs: false,
+      };
+    }
+    return config;
+  },
+
+  // images: {
+  //   unoptimized: true, // Disable image optimization for static export
+  //   remotePatterns: [
+  //     {
+  //       protocol: 'https',
+  //       hostname: 'raw.githubusercontent.com',
+  //       port: '',
+  //       pathname: '/**',
+  //     },
+  //     {
+  //       protocol: 'https',
+  //       hostname: 'example.com',
+  //       port: '',
+  //       pathname: '/**',
+  //     },
+  //     {
+  //       protocol: 'https',
+  //       hostname: 'chatnextjs.bunlong.site',
+  //       port: '',
+  //       pathname: '/**',
+  //     },
+  //     {
+  //       protocol: 'https',
+  //       hostname: 'chatspringboot.bunlong.site',
+  //       port: '',
+  //       pathname: '/**',
+  //     }
+  //   ],
+  // },
 };
 
 // export default nextConfig;

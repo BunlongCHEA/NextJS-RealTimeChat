@@ -1,7 +1,9 @@
 # Multi-stage build for Next.js 15
-FROM node:25-alpine AS builder
+FROM node:25-alpine AS base
 
 # Install dependencies only when needed
+FROM base AS deps
+RUN apk add --no-cache libc6-compat
 WORKDIR /app
 
 # Copy package files
@@ -9,6 +11,9 @@ COPY package.json package-lock.json* ./
 RUN npm ci
 
 # Rebuild the source code only when needed
+FROM base AS builder
+WORKDIR /app
+COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
 # Build with production environment
@@ -18,45 +23,69 @@ ENV NEXT_TELEMETRY_DISABLED=1
 # Build the application
 RUN npm run build
 
+# Production stage with Node.js + Nginx
+FROM node:25-alpine AS runner
+
 # Production stage with Nginx
-FROM nginx:1.29.3-alpine AS runner
+# FROM nginx:1.29.3-alpine AS runner
 
-# Install curl for health checks
-RUN apk add --no-cache curl
+# Install curl for health checks, nginx, and other utilities
+RUN apk add --no-cache nginx curl supervisor
 
-# Create nginx user (if not exists)
-# RUN addgroup -g 101 -S nginx || true
-# RUN adduser -S -D -H -u 101 -h /var/cache/nginx -s /sbin/nologin -G nginx -g nginx nginx || true
+# Create app user
+RUN addgroup --system --gid 1001 nodejs
+RUN adduser --system --uid 1001 nextjs
 
-# Remove default nginx website
-# RUN rm -rf /usr/share/nginx/html/*
+# Set working directory
+WORKDIR /app
 
-# Copy built Next.js static files from builder stage
-# COPY --from=builder /app/out /usr/share/nginx/html
-# COPY --from=builder /app/public /usr/share/nginx/html
+# Copy built application
+COPY --from=builder /app/.next/standalone ./
+COPY --from=builder /app/.next/static ./.next/static
+COPY --from=builder /app/public ./public
+COPY --from=builder /app/package.json ./package.json
 
 # Copy custom nginx configuration
 COPY nginx.conf /etc/nginx/nginx.conf
 
-# Create nginx directories and set permissions
-# RUN mkdir -p /var/cache/nginx /var/log/nginx /var/run \
-#     && chown -R nginx:nginx /var/cache/nginx /var/log/nginx /var/run \
-#     && chown -R nginx:nginx /usr/share/nginx/html \
-#     && chmod -R 755 /usr/share/nginx/html
+# Copy supervisor configuration
+COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 
-# Create pid file with proper permissions
-# RUN touch /var/run/nginx.pid \
-#     && chown nginx:nginx /var/run/nginx.pid
+# Create nginx directories and set permissions
+RUN mkdir -p /var/cache/nginx/client_temp \
+             /var/cache/nginx/proxy_temp \
+             /var/cache/nginx/fastcgi_temp \
+             /var/cache/nginx/uwsgi_temp \
+             /var/cache/nginx/scgi_temp \
+             /var/log/nginx \
+             /var/log/supervisor \
+             /run/nginx && \
+    chown -R nextjs:nodejs /app && \
+    chown -R nextjs:nodejs /var/cache/nginx && \
+    chown -R nextjs:nodejs /var/log/nginx && \
+    chown -R nextjs:nodejs /var/log/supervisor && \
+    chown -R nextjs:nodejs /run/nginx && \
+    touch /var/run/nginx.pid && \
+    chown nextjs:nodejs /var/run/nginx.pid
 
 # Switch to non-root user
-# USER nginx
+USER nextjs
 
 # Expose port
-EXPOSE 8080
+EXPOSE 8080 3000
+
+# Set environment variables
+ENV PORT=3000
+# ENV HOSTNAME="0.0.0.0"
+ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=60s --retries=3 \
   CMD curl -f http://localhost:8080/health || exit 1
 
+# Start supervisor (manages both nginx and node.js)
+CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]
+
 # Start nginx in foreground
-CMD ["nginx", "-g", "daemon off;"]
+# CMD ["nginx", "-g", "daemon off;"]
