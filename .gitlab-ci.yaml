@@ -1,0 +1,67 @@
+# .gitlab-ci.yml
+variables:
+  DOCKER_DRIVER: overlay2
+  DOCKER_TLS_CERTDIR: "/certs"
+  # KUBECONFIG: /tmp/kubeconfig
+  KUBECONTEXT: "gke_theta-moment-469209-j0_asia-southeast1_autopilot-cluster-1"
+  KUBE_NAMESPACE: "production"
+  # GKE Configuration
+  GCP_PROJECT_ID: "theta-moment-469209-j0"
+  GKE_CLUSTER_NAME: "autopilot-cluster-1"
+  GKE_CLUSTER_ZONE: "asia-southeast1"
+
+stages:
+  - build
+  - deploy
+
+# Build and Push Docker Image
+build:
+  stage: build
+  image: docker:28.3.3
+  services:
+    - docker:28.3.3-dind
+  before_script:
+    - echo $CI_REGISTRY_PASSWORD | docker login -u $CI_REGISTRY_USER --password-stdin $CI_REGISTRY
+  script:
+    # . at then end: is used the current directory to look for the Dockerfile...
+    - docker build -t $CI_REGISTRY_IMAGE:$CI_COMMIT_SHA -t $CI_REGISTRY_IMAGE:latest .
+    - docker push $CI_REGISTRY_IMAGE:$CI_COMMIT_SHA
+    - docker push $CI_REGISTRY_IMAGE:latest
+  only:
+    - main
+    - develop
+
+# Deploy app & database to GKE using kubectl & ArgoCD
+deploy:
+  stage: deploy
+  image: google/cloud-sdk:alpine
+  before_script:
+    # Decode base64 and create temporary JSON file
+    - echo $GCP_SERVICE_ACCOUNT_KEY | base64 -d > /tmp/gcp-key.json
+    # Authenticate gcloud CLI with the service account
+    - gcloud auth activate-service-account --key-file /tmp/gcp-key.json
+    # Set the GCP project context, [MASK] from GitLab Variables
+    - gcloud config set project $GCP_PROJECT_ID
+    # Get GKE cluster credentials for kubectl
+    - gcloud container clusters get-credentials $GKE_CLUSTER_NAME --zone $GKE_CLUSTER_ZONE
+    # Install kubectl if not already available in the image
+    - gcloud components install kubectl
+    # Download and setup kubectl binary, version v1.34.1 is released September 9, 2025
+    # - curl -sSL -o /usr/local/bin/kubectl https://dl.k8s.io/release/v1.34.1/bin/linux/amd64/kubectl
+    # - chmod +x /usr/local/bin/kubectl
+  script:
+    # Create namespace if it doesn't exist
+    - kubectl create namespace production --dry-run=client -o yaml | kubectl apply -f -
+
+    # Apply ArgoCD app manifests for deployment
+    - kubectl apply -f deploy/argocd
+
+    # Optionally, trigger sync immediately; -n argocd: namespace where ArgoCD is installed, use for store metadata of db & application, but actual build is in production namespace
+    - |
+      if kubectl get application nextjs-chat -n argocd >/dev/null 2>&1; then
+        kubectl patch application nextjs-chat -n argocd --type merge -p '{"operation":{"sync":{"syncStrategy":{"sync":{}}}}}' || true
+      fi
+  when: manual
+  only:
+    - main
+    - develop

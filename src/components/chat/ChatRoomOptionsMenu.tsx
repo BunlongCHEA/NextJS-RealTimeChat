@@ -333,7 +333,7 @@ export default function ChatRoomOptionsMenu({
             {/* Add Friends */}
             <button
               onClick={() => setShowAddFriends(true)}
-              className="w-full px-4 py-2 text-left hover:bg-gray-50 text-sm flex items-center"
+              className="w-full px-4 py-2 text-left hover:bg-gray-50 text-sm flex items-center text-black"
             >
               <UserPlusIcon className="w-4 h-4 mr-2" />
               Add Friends
@@ -346,7 +346,7 @@ export default function ChatRoomOptionsMenu({
                   setNewRoomName(chatRoom.name);
                   setShowRename(true);
                 }}
-                className="w-full px-4 py-2 text-left hover:bg-gray-50 text-sm flex items-center"
+                className="w-full px-4 py-2 text-left hover:bg-gray-50 text-sm flex items-center text-black"
               >
                 <PencilIcon className="w-4 h-4 mr-2" />
                 Rename {chatRoom.type === EnumRoomType.GROUP ? 'Group' : 'Channel'}

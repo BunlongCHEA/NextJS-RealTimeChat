@@ -105,3 +105,28 @@ export function getOnlineStatus(online: boolean, lastSeen?: string): string {
     year: 'numeric'
   });
 }
+
+// Returns the UI color/status-dot class for sidebar/avatar indicator
+export function getOnlineStatusUI(online: boolean, lastSeen?: string): string {
+  if (online) return 'bg-green-500'; // online
+  if (!lastSeen) return 'bg-gray-400';
+
+  const lastSeenDate = new Date(lastSeen);
+  const now = new Date();
+  const diffInMs = now.getTime() - lastSeenDate.getTime();
+  const diffInMinutes = Math.floor(diffInMs / (1000 * 60));
+
+  // If the user was recently seen (e.g., within 5 minutes), show a different color
+  if (diffInMinutes < 5) return 'bg-yellow-400'; // recently online
+
+  // Otherwise, offline/away
+  return 'bg-gray-400';
+}
+
+// Unified export: returns both the text and UI class
+export function userStatus(online: boolean, lastSeen?: string) {
+  return {
+    text: getOnlineStatus(online, lastSeen),
+    dot: getOnlineStatusUI(online, lastSeen)
+  };
+}

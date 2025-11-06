@@ -43,7 +43,7 @@ export class ApiService {
 
     // Handle your BaseDTO response structure
     const result = await response.json();
-    console.log('API Response:', result);
+    // console.log('API Response:', result);
     return result.data; // Extract the data from BaseDTO
   }
 
@@ -265,9 +265,14 @@ export class ApiService {
     muted?: boolean, 
     blocked?: boolean
   ): Promise<ParticipantDTO> {
-    return this.request<ParticipantDTO>(`/participants/${participantId}/status`, {
+    const params = new URLSearchParams({
+      muted: muted ? 'true' : 'false',
+      blocked: blocked ? 'true' : 'false',
+    });
+
+    return this.request<ParticipantDTO>(`/participants/${participantId}/status?${params}`, {
       method: 'PUT',
-      body: JSON.stringify({ muted, blocked }),
+      // body: JSON.stringify({ muted, blocked }),
     });
   }
 
@@ -276,23 +281,43 @@ export class ApiService {
     chatRoomId: number, 
     messageId: number
   ): Promise<ParticipantDTO> {
-    return this.request<ParticipantDTO>('/participants/last-read', {
+    const params = new URLSearchParams({
+      messageId: messageId.toString(),
+    });
+
+    return this.request<ParticipantDTO>(`/participants/user/${userId}/room/${chatRoomId}/read?${params}`, {
       method: 'PUT',
-      body: JSON.stringify({ userId, chatRoomId, messageId }),
+      // body: JSON.stringify({ userId, chatRoomId, messageId }),
     });
   }
 
   static async updateOnlineStatus(userId: number, online: boolean): Promise<ParticipantDTO> {
-    return this.request<ParticipantDTO>('/participants/online-status', {
-      method: 'PUT',
-      body: JSON.stringify({ userId, online }),
-    });
+    // const params = new URLSearchParams({
+    //   online: online.toString(),
+    // });
+
+    try {
+      const response = await this.request<ParticipantDTO>(`/participants/user/${userId}/status?online=${online}`, {
+        method: 'PUT',
+        // headers: {
+        //   'Content-Type': 'application/json',
+        // },
+      });
+      return response;
+    } catch (error) {
+      console.error('Failed to update online status:', error);
+      throw error;
+    }
   }
 
   static async updateLastSeen(userId: number, lastSeen: string): Promise<ParticipantDTO> {
-    return this.request<ParticipantDTO>('/participants/last-seen', {
+    const params = new URLSearchParams({
+      lastSeen: lastSeen.toString(),
+    });
+
+    return this.request<ParticipantDTO>(`/participants/user/${userId}/lastseen?${params}`, {
       method: 'PUT',
-      body: JSON.stringify({ userId, lastSeen }),
+      // body: JSON.stringify({ userId, lastSeen }),
     });
   }
 
@@ -303,9 +328,15 @@ export class ApiService {
     messageId: number, 
     status: EnumStatus
   ): Promise<MessageStatus> {
-    return this.request<MessageStatus>('/message-status', {
+    const params = new URLSearchParams({
+      userId: userId.toString(),
+      messageId: messageId.toString(),
+      status,
+    });
+
+    return this.request<MessageStatus>(`/message-status?${params}`, {
       method: 'POST',
-      body: JSON.stringify({ userId, messageId, status }),
+      // body: JSON.stringify({ userId, messageId, status }),
     });
   }
 
@@ -314,17 +345,30 @@ export class ApiService {
     messageId: number, 
     status: EnumStatus
   ): Promise<MessageStatus> {
-    return this.request<MessageStatus>('/message-status/update', {
+    const params = new URLSearchParams({
+      userId: userId.toString(),
+      messageId: messageId.toString(),
+      status,
+    });
+
+    return this.request<MessageStatus>(`/message-status?${params}`, {
       method: 'PUT',
-      body: JSON.stringify({ userId, messageId, status }),
+      // body: JSON.stringify({ userId, messageId, status }),
     });
   }
 
   static async getMessageStatusByUserAndMessage(
     userId: number, 
-    messageId: number
+    messageId: number,
+    isReceivedUser: boolean
   ): Promise<MessageStatus> {
-    return this.request<MessageStatus>(`/message-status/user/${userId}/message/${messageId}`);
+    const params = new URLSearchParams({
+      userId: userId.toString(),
+      messageId: messageId.toString(),
+      isReceivedUser: isReceivedUser.toString()
+    });
+
+    return this.request<MessageStatus>(`/message-status/user/message?${params}`);
   }
 
 

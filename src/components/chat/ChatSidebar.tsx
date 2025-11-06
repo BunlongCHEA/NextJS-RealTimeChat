@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, forwardRef, useImperativeHandle } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/hooks/useAuth';
 import { ApiService } from '@/lib/api';
@@ -9,7 +9,14 @@ import {
   ChatFilter, 
   SearchFilter, 
   EnumRoomType,
-  ParticipantDTO
+  ParticipantDTO,
+  ChatRoomBroadcast,
+  ParticipantAddedBroadcast,
+  AddedToChatRoomBroadcast,
+  MessageStatusUpdate,
+  EnumStatus,
+  UserStatusUpdate,
+  ChatMessageDTO
 } from '@/types/chat';
 import { User } from '@/types/user';
 import { 
@@ -17,8 +24,11 @@ import {
   getChatRoomDisplayName, 
   formatMessageTime, 
   truncateMessage, 
-  getMessagePreview 
+  getMessagePreview,
+  getOnlineStatus,
+  userStatus
 } from '@/lib/chat-utils';
+import { WebSocketService } from '@/lib/websocket';
 import { 
   Bars3Icon, 
   MagnifyingGlassIcon,
@@ -28,14 +38,18 @@ import {
   SpeakerWaveIcon,
   XMarkIcon,
   PlusIcon,
-  Cog6ToothIcon
+  Cog6ToothIcon,
+  ArrowPathIcon
 } from '@heroicons/react/24/outline';
 import CreateGroupModal from './CreateGroupModal';
 import CreateChannelModal from './CreateChannelModal';
+import Image from 'next/image';
 
 interface ChatSidebarProps {
   selectedRoomId?: number;
   onRoomSelect: (roomId: number) => void;
+  onRoomCreated?: (roomId: number) => void;
+  onRefreshNeeded?: () => void;
 }
 
 interface SearchResult {
@@ -47,8 +61,14 @@ interface SearchResult {
   subtitle?: string;
 }
 
+export interface ChatSidebarRef {
+  refreshChatRooms: () => void;
+}
+
 export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSidebarProps) {
-  const { user } = useAuth();
+// const ChatSidebar = forwardRef<ChatSidebarRef, ChatSidebarProps>(
+  // ({ selectedRoomId, onRoomSelect, onRoomCreated, onRefreshNeeded }, ref) => {
+  const { user, token } = useAuth();
   const router = useRouter();
   const [chatRooms, setChatRooms] = useState<ChatRoomDTO[]>([]);
   const [filteredRooms, setFilteredRooms] = useState<ChatRoomDTO[]>([]);
@@ -62,27 +82,135 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
   const [loading, setLoading] = useState(true);
   const [searchLoading, setSearchLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [wsConnected, setWsConnected] = useState(false);
   const debounceTimer = useRef<NodeJS.Timeout | null>(null);
   const [showCreateGroupModal, setShowCreateGroupModal] = useState(false);
   const [showCreateChannelModal, setShowCreateChannelModal] = useState(false);
+  const wsService = useRef(WebSocketService.getInstance());
+  const [wsInitialized, setWsInitialized] = useState(false);
+
+  // Add a state to track global WebSocket subscription
+  const [globalWSInitialized, setGlobalWSInitialized] = useState(false);
+
+  // Add state to track online status
+  const [isOnline, setIsOnline] = useState(true);
+  const lastRequestedOnlineStatus = useRef<boolean | null>(null);
+  const onlineStatusTimeout = useRef<NodeJS.Timeout | null>(null);
+
+  const [unreadCounts, setUnreadCounts] = useState<Map<number, number>>(new Map());
 
   useEffect(() => {
-    loadChatRooms();
+    if (user && token) {
+      // initial load: show loading indicator
+      loadChatRooms(true);
+      // Set user online when component mounts
+      updateUserOnlineStatus(true);
+    }
+
+    // Cleanup function for when component unmounts or user changes
+    return () => {
+      if (user) {
+        updateUserOnlineStatus(false);
+      }
+    };
+  }, [user, token]);
+
+  // Handle browser/tab close and page visibility
+  useEffect(() => {
+    if (!user) return;
+
+    // Handle page visibility change
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        // Page is hidden (minimized, switched tab, etc.)
+        updateUserOnlineStatus(false);
+      } else {
+        // Page is visible again
+        updateUserOnlineStatus(true);
+      }
+    };
+
+    // Handle browser/tab close
+    const handleBeforeUnload = () => {
+      if (user) {
+        // Use sendBeacon for reliability during page unload
+        navigator.sendBeacon(
+          `/api/participants/user/${user.id}/online?online=false`,
+          JSON.stringify({ online: false })
+        );
+      }
+    };
+
+    // Handle browser online/offline status
+    const handleOnlineStatus = () => {
+      const online = navigator.onLine;
+      setIsOnline(online);
+      if (user) {
+        updateUserOnlineStatus(online);
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    window.addEventListener('online', handleOnlineStatus);
+    window.addEventListener('offline', handleOnlineStatus);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      window.removeEventListener('online', handleOnlineStatus);
+      window.removeEventListener('offline', handleOnlineStatus);
+    };
   }, [user]);
+
+  // Separate effect for GLOBAL WebSocket connection (not room-specific)
+  useEffect(() => {
+    if (user && token && !globalWSInitialized && !loading) {
+      connectGlobalWebSocket();
+      setGlobalWSInitialized(true);
+    }
+  }, [user, token, globalWSInitialized, loading]);
+
+  // Add a periodic refresh to catch missed updates
+  useEffect(() => {
+    if (wsConnected && user) {
+      const refreshInterval = setInterval(() => {
+        // console.log('[ChatSidebar] Periodic refresh of chat rooms');
+        loadChatRooms(false); // Refresh chat rooms
+        refreshUserStatus(); // Refresh user status
+      }, 5000); // Refresh in seconds
+      
+      return () => clearInterval(refreshInterval);
+    }
+  }, [wsConnected, user]);
+
+  // Track selected room for read status updates
+  useEffect(() => {
+    if (selectedRoomId && user) {
+      // When a room is selected, we could mark messages as read
+      // This would typically be handled by the ChatWindow component
+      // but we can also track room selection here
+      handleRoomSelection(selectedRoomId);
+
+      // Clear unread count for selected room
+      setUnreadCounts(prev => {
+        const newCounts = new Map(prev);
+        newCounts.delete(selectedRoomId);
+        return newCounts;
+      });
+    }
+  }, [selectedRoomId, user]);
 
   // Debouncing effect for search query
   useEffect(() => {
-    // Clear previous timer
     if (debounceTimer.current) {
       clearTimeout(debounceTimer.current);
     }
 
-    // Set new timer for debouncing
     debounceTimer.current = setTimeout(() => {
       setDebouncedSearchQuery(searchQuery);
-    }, 1000); // 300ms delay
+    }, 1000);
 
-    // Cleanup function
     return () => {
       if (debounceTimer.current) {
         clearTimeout(debounceTimer.current);
@@ -111,13 +239,393 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
     return () => document.removeEventListener('click', handleClickOutside);
   }, [showMenu]);
 
-  const loadChatRooms = async () => {
+  // Expose the refresh method via ref
+  // useImperativeHandle(ref, () => ({
+  //   refreshChatRooms: loadChatRooms
+  // }));
+
+  // Load unread counts when chat rooms change
+  useEffect(() => {
+    if (chatRooms.length > 0 && user) {
+      loadUnreadCounts();
+    }
+  }, [chatRooms, user]);
+
+  // Handle Message Statuses
+
+  // Load unread message counts
+  const loadUnreadCounts = async () => {
+    if (!user) return;
+
+    try {
+      const counts = new Map<number, number>();
+      
+      for (const room of chatRooms) {
+        if (room.lastMessageId && room.lastMessageId > 0) {
+          try {
+            // Only check unread status if the current user is NOT the sender of the last message
+            // Get the last message details to check who sent it
+            const lastMessage = await ApiService.getMessageById(room.lastMessageId);
+            
+            // If current user sent the last message, don't show unread badge
+            if (lastMessage.senderId === user.id) {
+              continue;
+            }
+            
+            // Check if user has read the last message
+            const status = await ApiService.getMessageStatusByUserAndMessage(user.id, room.lastMessageId, true);
+
+            // console.log(`[ChatSidebar] Message status for user ${user.id}, message ${room.lastMessageId} in room ${room.id}:`, status);
+            
+            // If no read status found or status is not READ, count as unread
+            if (!status || status.status !== EnumStatus.READ) {
+              // For simplicity, we'll count 1 unread message per room
+              // In a real implementation, you'd want to count all unread messages
+              counts.set(room.id, 1);
+            }
+          } catch (error) {
+            // If status doesn't exist and current user didn't send the message, consider it unread
+            console.log(`[ChatSidebar] No status found for room ${room.id}, message ${room.lastMessageId}`);
+            // We need to check who sent the last message first
+            try {
+              const lastMessage = await ApiService.getMessageById(room.lastMessageId);
+              if (lastMessage.senderId !== user.id) {
+                counts.set(room.id, 1);
+              }
+            } catch (msgError) {
+              console.error('Failed to get last message details:', msgError);
+            }
+          }
+        }
+      }
+      
+      setUnreadCounts(counts);
+    } catch (error) {
+      console.error('Failed to load unread counts:', error);
+    }
+  };
+
+  // Update last read message for a room
+  const updateLastReadMessage = async (roomId: number, messageId: number) => {
+    if (!user) return;
+
+    try {
+      await ApiService.updateLastReadMessageId(user.id, roomId, messageId);
+      console.log(`[ChatSidebar] Updated last read message for room ${roomId}, message ${messageId}`);
+
+      // Clear unread count for this room
+      setUnreadCounts(prev => {
+        const newCounts = new Map(prev);
+        newCounts.delete(roomId);
+        return newCounts;
+      });
+      
+      // Refresh chat rooms to update unread counts
+      loadChatRooms(false);
+    } catch (error) {
+      console.error('Failed to update last read message:', error);
+    }
+  };
+
+  // Handle room selection and potentially mark as read
+  const handleRoomSelection = (roomId: number) => {
+    // Find the selected room
+    const room = chatRooms.find(r => r.id === roomId);
+    if (room && room.lastMessageId) {
+      // Update last read message to the latest message in the room
+      updateLastReadMessage(roomId, room.lastMessageId);
+    }
+  };
+
+
+  // Handle User Status Updates
+
+  // Update user online status
+  const updateUserOnlineStatus = async (online: boolean) => {
+    if (!user) return;
+
+    // Save the latest requested status
+    lastRequestedOnlineStatus.current = online;
+
+    // Clear any existing timer
+    if (onlineStatusTimeout.current) {
+      clearTimeout(onlineStatusTimeout.current);
+    }
+
+    // Set a new timer
+    onlineStatusTimeout.current = setTimeout(async () => {
+      // Only update if the status hasn't changed in the last 5 seconds
+      if (lastRequestedOnlineStatus.current === online) {
+        try {
+          const result = await ApiService.updateOnlineStatus(user.id, online);
+          setIsOnline(online);
+          console.log(`[ChatSidebar] User ${user.username} status updated to: ${online ? 'online' : 'offline'}`);
+          // console.log(`[ChatSidebar] Participant API response:`, result);
+          
+        } catch (error) {
+          console.error('Failed to update online status:', error);
+          setIsOnline(false);
+        }
+      }
+    }, 5000);
+  };
+
+  // Add this function inside ChatSidebar component
+  const refreshUserStatus = async () => {
     if (!user) return;
     
     try {
-      setLoading(true);
+      // Silently refresh chat rooms to get updated participant status
+      const rooms = await ApiService.getChatRoomsByUserId(user.id);
+      setChatRooms(rooms);
+    } catch (error) {
+      console.error('Failed to refresh user status:', error);
+    }
+  };
+
+
+  // Handle websocket connections and subscriptions
+
+  // Global WebSocket connection for cross-room updates
+  const connectGlobalWebSocket = async () => {
+    if (!user || !token) return;
+
+    try {
+      if (wsService.current.isWebSocketConnected()) {
+        setWsConnected(true);
+        setupGlobalWebSocketHandlers();
+        return;
+      }
+
+      await wsService.current.connect(token);
+      setWsConnected(true);
       setError(null);
-      // Use getChatRoomsByUserId for CHATS filter
+      setupGlobalWebSocketHandlers();
+    } catch (error) {
+      console.error('Global WebSocket connection failed:', error);
+      setWsConnected(false);
+      setError('Failed to connect to real-time updates');
+    }
+  };
+
+  // const connectWebSocket = async () => {
+  //   if (!user || !token) return;
+
+  //   try {
+  //     if (wsService.current.isWebSocketConnected()) {
+  //       setWsConnected(true);
+  //       setupWebSocketHandlers();
+  //       return;
+  //     }
+
+  //     await wsService.current.connect(token);
+  //     setWsConnected(true);
+  //     setError(null);
+  //     setupWebSocketHandlers();
+  //   } catch (error) {
+  //     console.error('WebSocket connection failed:', error);
+  //     setWsConnected(false);
+  //     setError('Failed to connect to real-time updates');
+  //   }
+  // };
+
+  // setupWebSocketHandlers : Setup GLOBAL WebSocket handlers that work across all rooms
+  const setupGlobalWebSocketHandlers = () => {
+    console.log('[ChatSidebar] Setting up global WebSocket handlers');
+
+    // Subscribe to new chat room creation
+    wsService.current.subscribeToNewChatRoom((update: ChatRoomBroadcast | AddedToChatRoomBroadcast) => {
+      if (update.type === 'NEW_CHAT_ROOM') {
+        subscribeToNewChatRoom(update);
+        loadChatRooms(false);
+        // if (onRefreshNeeded) {
+        //   onRefreshNeeded();
+        // }
+      } else if (update.type === 'ADDED_TO_CHAT_ROOM') {
+        handleAddedToChatRoom(update);
+        loadChatRooms(false);
+        // if (onRefreshNeeded) {
+        //   onRefreshNeeded();
+        // }
+      }
+    });
+
+    // Subscribe to ALL message updates globally (for sidebar refresh)
+    wsService.current.subscribeToGlobalMessageNotifications?.((notification: ChatMessageDTO) => {
+      console.log('[ChatSidebar] Received global message notification:', notification);
+      handleGlobalMessageNotification(notification);
+      loadChatRooms(false); // Refresh to update last message
+      // if (onRefreshNeeded) {
+      //   onRefreshNeeded();
+      // }
+
+      // // Update unread count for the room (if not currently selected)
+      // if (selectedRoomId !== notification.chatRoomId) {
+      //   setUnreadCounts(prev => {
+      //     const newCounts = new Map(prev);
+      //     const currentCount = newCounts.get(notification.chatRoomId) || 0;
+      //     newCounts.set(notification.chatRoomId, currentCount + 1);
+      //     return newCounts;
+      //   });
+      // }
+
+      // Only update unread count if current user is NOT the sender and not in the selected room
+      if (user && notification.senderId !== user.id && selectedRoomId !== notification.chatRoomId) {
+        setUnreadCounts(prev => {
+          const newCounts = new Map(prev);
+          const currentCount = newCounts.get(notification.chatRoomId) || 0;
+          newCounts.set(notification.chatRoomId, currentCount + 1);
+          return newCounts;
+        });
+      }
+    });
+
+    // Subscribe to ALL participant additions across rooms
+    wsService.current.subscribeToErrors((errorMessage: string) => {
+      setError(errorMessage);
+    });
+
+    // Subscribe to global user status updates
+    wsService.current.subscribeToUserOrMessageStatus(0, (update: UserStatusUpdate | MessageStatusUpdate) => {
+      if ('type' in update && update.type === 'MESSAGE_STATUS_UPDATE') {
+        // Handle message status updates globally
+        handleGlobalMessageUpdate(update);
+        
+      } else if ('username' in update) {
+        // Handle user status updates globally
+        handleGlobalUserStatusUpdate(update as UserStatusUpdate);
+        loadChatRooms(false);
+      }
+    });
+
+    // Subscribe to participant additions (when users are added to groups)
+    // This will be called after a new chat room is created and participants are added
+    wsService.current.subscribeParticipantsAdded = (chatRoomId: number, onUpdate: (update: ParticipantAddedBroadcast) => void) => {
+      wsService.current.subscribeParticipantsAdded(chatRoomId, (update: ParticipantAddedBroadcast) => {
+        if (update.type === 'PARTICIPANT_ADDED') {
+          subscribeParticipantsAdded(update);
+          loadChatRooms(false);
+          // if (onRefreshNeeded) {
+          //   onRefreshNeeded();
+          // }
+        }
+      });
+    };
+  };
+
+  const handleGlobalMessageNotification = (message: ChatMessageDTO) => {
+    // If the message is for the currently selected room, mark it as read
+    if (selectedRoomId && message.chatRoomId === selectedRoomId) {
+      updateLastReadMessage(message.chatRoomId, message.id);
+    }
+  };
+
+  // Handle global message updates (affects last message in sidebar)
+  const handleGlobalMessageUpdate = (update: MessageStatusUpdate) => {
+    // If a message status was updated to READ, refresh unread counts
+    if (update.status === EnumStatus.READ) {
+      loadUnreadCounts();
+    }
+
+    // This will trigger a refresh of chat rooms to update last message timestamps
+    loadChatRooms(false);
+    // if (onRefreshNeeded) {
+    //   onRefreshNeeded();
+    // }
+  };
+
+  // Handle global user status updates
+  const handleGlobalUserStatusUpdate = (update: UserStatusUpdate) => {
+    setChatRooms(prev => prev.map(room => {
+      if (room.participants) {
+        const updatedParticipants = room.participants.map(participant => {
+          if (participant.userId === update.userId) {
+            return {
+              ...participant,
+              online: update.online,
+              lastSeen: update.lastSeen
+            };
+          }
+          return participant;
+        });
+        return { ...room, participants: updatedParticipants };
+      }
+      return room;
+    }));
+  };
+
+
+  // Handle WebSocket subscriptions and updates
+
+  const subscribeToNewChatRoom = (update: ChatRoomBroadcast) => {
+    const newRoom = update.chatRoom;
+    
+    setChatRooms(prevRooms => {
+      const exists = prevRooms.some(room => room.id === newRoom.id);
+      if (exists) return prevRooms;
+      
+      return [newRoom, ...prevRooms];
+    });
+
+    // Notify parent about new room creation
+    // if (onRoomCreated) {
+    //   onRoomCreated(newRoom.id);
+    // }
+
+    setError(`✅ New chat room "${newRoom.name}" created`);
+    setTimeout(() => setError(null), 3000);
+  };
+
+  const handleAddedToChatRoom = async (update: AddedToChatRoomBroadcast) => {
+    try {
+      const newRoom = await ApiService.getChatRoomById(update.chatRoomId);
+      
+      setChatRooms(prev => {
+        const exists = prev.some(room => room.id === newRoom.id);
+        if (exists) return prev;
+        return [newRoom, ...prev];
+      });
+
+      setError(`✅ You were added to "${newRoom.name}" by ${update.addedBy}`);
+      setTimeout(() => setError(null), 5000);
+      
+    } catch (error) {
+      console.error('Failed to fetch new chat room:', error);
+      setError('Failed to load new chat room details');
+    }
+  };
+
+  const subscribeParticipantsAdded = (update: ParticipantAddedBroadcast) => {
+    setChatRooms(prev => prev.map(room => {
+      if (room.id === update.chatRoomId) {
+        const updatedParticipants = room.participants ? [...room.participants, update.participant] : [update.participant];
+        return { ...room, participants: updatedParticipants };
+      }
+      return room;
+    }));
+  };
+
+  // const subscribeToUserOrMessageStatus = (update: MessageStatusUpdate) => {
+  //   if (update.type === 'MESSAGE_STATUS_UPDATE' && update.status === EnumStatus.DELIVERED) {
+  //     // Handle message delivery status
+  //     console.log('Message delivered:', update);
+  //   }
+  // };
+
+  // Helper functions
+
+  const handleManualRefresh = async () => {
+    await loadChatRooms(true);
+    await loadUnreadCounts();
+  };
+
+  const loadChatRooms = async (showLoading = true) => {
+    if (!user) return;
+    
+    try {
+      if (showLoading) setLoading(true);
+      setError(null);
+      
       const rooms = await ApiService.getChatRoomsByUserId(user.id);
       setChatRooms(rooms);
     } catch (error) {
@@ -125,20 +633,23 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
       setError(errorMessage);
       console.error('Failed to load chat rooms:', error);
     } finally {
-      setLoading(false);
+      if (showLoading) setLoading(false);
     }
   };
 
   const filterRooms = () => {
-    let filtered = chatRooms;
+    filterRoomsWithRooms(chatRooms);
+  };
 
-    // Apply chat type filter
+  const filterRoomsWithRooms = (rooms: ChatRoomDTO[]) => {
+    let filtered = rooms;
+
     if (activeFilter !== 'ALL') {
       const roomType = activeFilter as keyof typeof EnumRoomType;
       filtered = filtered.filter(room => room.type === EnumRoomType[roomType]);
     }
 
-    setFilteredRooms(filtered);
+    setFilteredRooms([...filtered]);
   };
 
   const handleSearch = async () => {
@@ -154,7 +665,6 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
 
       switch (searchFilter) {
         case 'CHATS':
-          // Search in existing chat rooms
           const filteredChats = chatRooms.filter(room => {
             const displayName = getChatRoomDisplayName(room, user).toLowerCase();
             return displayName.includes(query) || room.name.toLowerCase().includes(query);
@@ -173,7 +683,6 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
           break;
           
         case 'MESSAGES':
-          // Search in messages via API
           try {
             const searchResults = await ApiService.searchMessages(query);
             const roomIdsWithMessages = new Set(searchResults.map(msg => msg.chatRoomId));
@@ -194,14 +703,11 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
           
         case 'FRIENDS':
           if (query.startsWith('@')) {
-            // Search external users when query starts with @
             const username = query.substring(1);
             if (username.trim()) {
               try {
-                // Use getUserByUsername API for external search
                 const externalUser = await ApiService.getUserByUsername(username);
                 
-                // Only add if it's not the current user
                 if (externalUser.id !== user.id) {
                   results.push({
                     type: 'external_friend' as const,
@@ -214,15 +720,12 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
                 }
               } catch (error) {
                 console.error('External user search error:', error);
-                // User not found - this is normal, don't show error to user
               }
             }
           } else {
-            // Search internal friends using getPersonalChatPartners
             try {
               const personalPartners = await ApiService.getPersonalChatPartners(user.id);
               
-              // Filter partners based on search query
               const filteredPartners = personalPartners.filter(partner => 
                 partner.fullName?.toLowerCase().includes(query) ||
                 partner.username?.toLowerCase().includes(query)
@@ -234,7 +737,7 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
                 id: partner.userId,
                 name: partner.fullName || partner.username,
                 avatar: `https://ui-avatars.com/api/?name=${encodeURIComponent(partner.fullName || partner.username)}&background=random`,
-                subtitle: `@${partner.username} • ${partner.online ? 'Online' : 'Offline'}`
+                subtitle: `@${partner.username} • ${userStatus(partner.online, partner.lastSeen).text}`
               })));
             } catch (error) {
               console.error('Personal chat partners search error:', error);
@@ -268,26 +771,21 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
     }
   };
 
-  // Handle clicking on a search result for friends or channels/groups
   const handleSearchResultClick = async (result: SearchResult) => {
     if (result.type === 'chat' || result.type === 'channel') {
       handleRoomClick(result.id);
     } else if (result.type === 'internal_friend' || result.type === 'external_friend') {
       try {
         setSearchLoading(true);
-        // Use createChatRoom API to find or create personal chat
         const personalChatRoom = await ApiService.createOrFindPersonalChat(result.id, user!.id);
         
-        // Update local chat rooms if it's a new room
         const existingRoom = chatRooms.find(room => room.id === personalChatRoom.id);
         if (!existingRoom) {
           setChatRooms(prev => [personalChatRoom, ...prev]);
         }
         
-        // Navigate to the chat
         handleRoomClick(personalChatRoom.id);
         
-        // Clear search
         setSearchQuery('');
         setDebouncedSearchQuery('');
         setSearchResults([]);
@@ -301,8 +799,6 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
     }
   };
 
-
-  // Helper and functionality methods 
   const getChatTypeIcon = (type: EnumRoomType) => {
     switch (type) {
       case EnumRoomType.PERSONAL:
@@ -316,19 +812,22 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
     }
   };
 
-  // Handle clicking on a chat room
   const handleRoomClick = (roomId: number) => {
     onRoomSelect(roomId);
     router.push(`/chat/${roomId}`);
+
+    // Update last read message when room is clicked
+    const room = chatRooms.find(r => r.id === roomId);
+    if (room && room.lastMessageId) {
+      updateLastReadMessage(roomId, room.lastMessageId);
+    }
   };
 
-  // Handle hamburger menu click
   const handleMenuClick = (e: React.MouseEvent) => {
     e.stopPropagation();
     setShowMenu(!showMenu);
   };
 
-  // Handle creating new chat (group/channel)
   const handleCreateNewChat = (type: 'GROUP' | 'CHANNEL') => {
     setShowMenu(false);
     
@@ -339,42 +838,46 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
     }
   };
 
-  // Handle after group is created
   const handleGroupCreated = async (groupId: number) => {
     try {
-      // Close the modal
       setShowCreateGroupModal(false);
       await new Promise(resolve => setTimeout(resolve, 100));
 
-      // Refresh chat rooms to include the new group
-      await loadChatRooms();
+      // Refresh chat rooms to show the new group
+      await loadChatRooms(true);
 
-      // Navigate to the new group
+      // Notify parent about the new room
+      // if (onRoomCreated) {
+      //   onRoomCreated(groupId);
+      // }
+
       handleRoomClick(groupId);
     } catch (error) {
       console.error('Error handling group creation:', error);
-      setError('Failed to load new group. Please refresh the page.');
+      setError('Failed to navigate to new group.');
     }
   };
 
   const handleChannelCreated = async (channelId: number) => {
     try {
-      // Close the modal
       setShowCreateChannelModal(false);
       await new Promise(resolve => setTimeout(resolve, 100));
 
-      // Refresh chat rooms to include the new group
-      await loadChatRooms();
+      // Refresh chat rooms to show the new channel
+      await loadChatRooms(true);
+      
+      // Notify parent about the new room
+      // if (onRoomCreated) {
+      //   onRoomCreated(channelId);
+      // }
 
-      // Navigate to the new channel
       handleRoomClick(channelId);
     } catch (error) {
       console.error('Error handling channel creation:', error);
-      setError('Failed to load new channel. Please refresh the page.');
+      setError('Failed to navigate to new channel.');
     }
   };
 
-  // Handle navigating to user profile
   const handleMyProfile = () => {
     setShowMenu(false);
     router.push('/profile');
@@ -394,7 +897,22 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
     }
   };
 
-  if (error) {
+  // Update UI:
+ 
+  // The WebSocket status indicator to show both WS and online status
+  const getConnectionStatusColor = () => {
+    if (!isOnline) return 'bg-red-500'; // Offline
+    if (!wsConnected) return 'bg-yellow-500'; // Online but WS disconnected
+    return 'bg-green-500'; // Online and connected
+  };
+
+  const getConnectionStatusText = () => {
+    if (!isOnline) return 'Offline';
+    if (!wsConnected) return 'Connecting';
+    return 'Live';
+  };
+
+  if (error && error.includes('Failed to load chat rooms')) {
     return (
       <div className="w-80 bg-gray-50 border-r border-gray-200 flex flex-col h-full">
         <div className="p-4 text-center">
@@ -402,7 +920,7 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
           <button 
             onClick={() => {
               setError(null);
-              loadChatRooms();
+              loadChatRooms(true);
             }}
             className="px-4 py-2 bg-blue-500 text-white rounded-lg text-sm hover:bg-blue-600"
           >
@@ -445,7 +963,7 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
                 <div className="py-2">
                   <button 
                     onClick={handleMyProfile}
-                    className="w-full px-4 py-2 text-left hover:bg-gray-50 text-sm flex items-center"
+                    className="w-full px-4 py-2 text-left hover:bg-gray-500 text-sm flex items-center text-black"
                   >
                     <UserIcon className="w-4 h-4 mr-2" />
                     My Profile
@@ -453,14 +971,14 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
                   <div className="border-t border-gray-100 my-1"></div>
                   <button 
                     onClick={() => handleCreateNewChat('GROUP')}
-                    className="w-full px-4 py-2 text-left hover:bg-gray-50 text-sm flex items-center"
+                    className="w-full px-4 py-2 text-left hover:bg-gray-500 text-sm flex items-center text-black"
                   >
                     <UserGroupIcon className="w-4 h-4 mr-2" />
                     New Group
                   </button>
                   <button 
                     onClick={() => handleCreateNewChat('CHANNEL')}
-                    className="w-full px-4 py-2 text-left hover:bg-gray-50 text-sm flex items-center"
+                    className="w-full px-4 py-2 text-left hover:bg-gray-500 text-sm flex items-center text-black"
                   >
                     <SpeakerWaveIcon className="w-4 h-4 mr-2" />
                     New Channel
@@ -468,7 +986,7 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
                   <div className="border-t border-gray-100 my-1"></div>
                   <button 
                     onClick={handleSettings}
-                    className="w-full px-4 py-2 text-left hover:bg-gray-50 text-sm flex items-center"
+                    className="w-full px-4 py-2 text-left hover:bg-gray-500 text-sm flex items-center text-black"
                   >
                     <Cog6ToothIcon className="w-4 h-4 mr-2" />
                     Settings
@@ -485,6 +1003,29 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
           >
             <MagnifyingGlassIcon className="w-6 h-6 text-gray-600" />
           </button>
+
+          {/* Manual Refresh Button */}
+          <button
+            onClick={handleManualRefresh}
+            className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+            title="Refresh chat list"
+          >
+            <ArrowPathIcon className="w-5 h-5 text-gray-600" />
+          </button>
+
+          {/* WebSocket Status Indicator */}
+          <div className="flex items-center space-x-1">
+            {/* <span className={`inline-block w-2 h-2 rounded-full ${
+              wsConnected ? 'bg-green-500' : 'bg-red-500'
+            }`}></span>
+            <span className="text-xs text-gray-500">
+              {wsConnected ? 'Live' : 'Offline'}
+            </span> */}
+            {/* <span className={`inline-block w-2 h-2 rounded-full ${getConnectionStatusColor()}`}></span>
+            <span className="text-xs text-gray-500">
+              {getConnectionStatusText()}
+            </span> */}
+          </div>
         </div>
 
         {/* Search Bar */}
@@ -504,7 +1045,7 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
                 }
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full pl-8 pr-8 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                className="w-full pl-8 pr-8 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm text-black"
               />
               <MagnifyingGlassIcon className="absolute left-2 top-2.5 w-4 h-4 text-gray-400" />
               {searchLoading ? (
@@ -608,9 +1149,9 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
           </div>
         ) : (
           <div className="space-y-1">
-            {displayItems.map((item) => (
+            {displayItems.map((item, index) => (
               <div
-                key={`${item.type}-${item.id}`}
+                key={`${item.type}-${item.id}-${index}`}
                 onClick={() => 
                   item.type === 'chat' || item.type === 'channel' ? 
                     handleRoomClick(item.id) : 
@@ -625,14 +1166,23 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
                 <div className="flex items-center space-x-3">
                   {/* Avatar */}
                   <div className="relative flex-shrink-0">
-                    <img
+                    {/* <img
                       src={item.avatar}
                       alt={item.name}
                       className="w-12 h-12 rounded-full object-cover"
                       onError={(e) => {
                         e.currentTarget.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(item.name)}&background=random`;
                       }}
+                    /> */}
+                    <Image
+                      src={item.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(item.name)}&background=random`}
+                      alt={item.name}
+                      width={48}
+                      height={48}
+                      className="w-12 h-12 rounded-full object-cover"
+                      unoptimized={item.avatar?.includes('ui-avatars.com')}
                     />
+
                     {/* Show indicators based on type */}
                     {item.type === 'internal_friend' && (
                       <div className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 border-2 border-white rounded-full"></div>
@@ -640,22 +1190,56 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
                     {item.type === 'external_friend' && (
                       <div className="absolute bottom-0 right-0 w-3 h-3 bg-blue-400 border-2 border-white rounded-full"></div>
                     )}
-                    {item.type === 'chat' && (item.data as ChatRoomDTO).type === EnumRoomType.PERSONAL && (
-                      <div className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 border-2 border-white rounded-full"></div>
-                    )}
+                    {/* Show online/offline indicator for personal chat rooms */}
+                    {item.type === 'chat' && (item.data as ChatRoomDTO).type === EnumRoomType.PERSONAL && (() => {
+                      // Find the other participant (not current user)
+                      const room = item.data as ChatRoomDTO;
+                      const other = room.participants?.find(p => p.userId !== user?.id);
+                      if (!other) return null;
+                      // const { dot: statusDotClass } = userStatus(other.online, other.lastSeen);
+                      const { dot } = userStatus(other.online, other.lastSeen);
+                      return (
+                        <div
+                          className={`absolute bottom-0 right-0 w-3 h-3 border-2 border-white rounded-full ${dot}`}
+                          title={userStatus(other.online, other.lastSeen).text}
+                        ></div>
+                        // <div className={`absolute bottom-0 right-0 w-3 h-3 border-2 border-white rounded-full ${statusDotClass}`}></div>
+                        // <div
+                        //   className={`absolute bottom-0 right-0 w-3 h-3 border-2 border-white rounded-full ${other.online ? 'bg-green-500' : 'bg-gray-400'}`}
+                        //   title={other.online ? 'Online' : 'Offline'}
+                        // ></div>
+                      );
+                    })()}
                   </div>
 
                   {/* Content Info */}
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center justify-between mb-1">
+
                       <h3 className="font-medium text-gray-900 truncate text-sm">
                         {item.name}
                       </h3>
-                      {item.type === 'chat' && (item.data as ChatRoomDTO).lastMessageTimestamp && (
+                      {/* {item.type === 'chat' && (item.data as ChatRoomDTO).lastMessageTimestamp && (
                         <span className="text-xs text-gray-500 flex-shrink-0">
                           {formatMessageTime((item.data as ChatRoomDTO).lastMessageTimestamp!)}
                         </span>
-                      )}
+                      )} */}
+                      
+                      <div className="flex items-center space-x-2">
+                        {/* Unread count badge */}
+                        {item.type === 'chat' && unreadCounts.has(item.id) && unreadCounts.get(item.id)! > 0 && (
+                          <div className="bg-blue-500 text-white text-xs rounded-full min-w-[20px] h-5 flex items-center justify-center px-1.5">
+                            {unreadCounts.get(item.id)}
+                          </div>
+                        )}
+                        {/* Existing timestamp */}
+                        {item.type === 'chat' && (item.data as ChatRoomDTO).lastMessageTimestamp && (
+                          <span className="text-xs text-gray-500 flex-shrink-0">
+                            {formatMessageTime((item.data as ChatRoomDTO).lastMessageTimestamp!)}
+                          </span>
+                        )}
+                      </div>
+
                     </div>
                     <div className="flex items-center">
                       <div className="flex-1 min-w-0">
@@ -680,19 +1264,19 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
       </div>
 
       {/* Error Toast */}
-      {error && (
-        <div className="p-2 bg-red-50 border-t border-red-200">
+      {/* {error && (
+        <div className={`p-2 border-t ${error.startsWith('✅') ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200'}`}>
           <div className="flex items-center justify-between">
-            <span className="text-red-600 text-xs">{error}</span>
+            <span className={`text-xs ${error.startsWith('✅') ? 'text-green-600' : 'text-red-600'}`}>{error}</span>
             <button
               onClick={() => setError(null)}
-              className="text-red-800 hover:text-red-900"
+              className={`${error.startsWith('✅') ? 'text-green-800 hover:text-green-900' : 'text-red-800 hover:text-red-900'}`}
             >
               <XMarkIcon className="w-4 h-4" />
             </button>
           </div>
         </div>
-      )}
+      )} */}
 
       {/* Render modals */}
       {showCreateGroupModal && (
@@ -712,4 +1296,10 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
       )}
     </div>
   );
-}
+};
+// });
+
+// Add display name for better debugging
+// ChatSidebar.displayName = 'ChatSidebar';
+
+// export default ChatSidebar;

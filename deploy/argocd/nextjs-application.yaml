@@ -1,0 +1,22 @@
+# ArgoCD Application for chat
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: nextjs-chat
+  namespace: argocd
+spec:
+  project: default
+  # Source configuration
+  source:
+    repoURL: https://gitlab.com/BunlongCHEA/NextJS-RealTimeChat.git
+    targetRevision: HEAD
+    path: deploy/app
+  # Destination cluster and namespace
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: production
+  # Sync policy
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true

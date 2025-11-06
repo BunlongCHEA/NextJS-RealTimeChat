@@ -1,0 +1,316 @@
+# Deployment for Next.js Chat Application with Nginx
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nextjs-app-deployment
+  namespace: production
+  labels:
+    app: nextjs-chat-app
+    version: "1.0.0"
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: nextjs-chat-app
+  template:
+    metadata:
+      labels:
+        app: nextjs-chat-app
+        environment: production
+        nginx-powered: "true"
+    spec:
+      containers:
+      - name: nextjs-nginx-chat-app
+        image: registry.gitlab.com/bunlongchea/nextjs-realtimechat:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8080
+          name: http
+          protocol: TCP
+        env:
+        # ConfigMap environment variables
+        - name: NEXT_PUBLIC_API_BASE_URL
+          valueFrom:
+            configMapKeyRef:
+              name: nextjs-app-config
+              key: NEXT_PUBLIC_API_BASE_URL
+        - name: NEXT_PUBLIC_WEBSOCKET_URL
+          valueFrom:
+            configMapKeyRef:
+              name: nextjs-app-config
+              key: NEXT_PUBLIC_WEBSOCKET_URL
+        # Secret environment variables
+        - name: JWT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: nextjs-app-secret
+              key: JWT_SECRET
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "300m"
+        # Checks if a container is running and able to serve traffic
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+            httpHeaders:
+            - name: Host
+              value: localhost
+          initialDelaySeconds: 30
+          periodSeconds: 30
+          timeoutSeconds: 10
+          failureThreshold: 3
+          successThreshold: 1
+        # Checks if a container is ready to accept requests from a service.
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+            httpHeaders:
+            - name: Host
+              value: localhost
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+          successThreshold: 1
+        # Verifies that an application has started successfully, especially for slow-starting applications; if succeeds, it allows liveness and readiness probes to begin
+        startupProbe:
+          httpGet:
+            path: /health
+            port: 8080
+            httpHeaders:
+            - name: Host
+              value: localhost
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 30
+          successThreshold: 1
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101  # nginx user
+        runAsGroup: 101 # nginx group
+        fsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 30
+
+---
+# Secret for Next.js application
+apiVersion: v1
+kind: Secret
+metadata:
+  name: nextjs-app-secret
+  namespace: production
+  labels:
+    app: nextjs-chat-app
+type: Opaque
+data:
+  # jwt-token
+  JWT_SECRET: 1de549fe4ebc93bf42b98b24fc5f617469e74d475a655d3df35fe2dce9268133e023c6471a99a72dc420e04389a4e6f8
+
+---
+# ConfigMap for Next.js Nginx environment variables
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nextjs-app-config
+  namespace: production
+  labels:
+    app: nextjs-chat-app
+data:  
+  # API Configuration for Chat App
+  NEXT_PUBLIC_API_BASE_URL: "https://chatspringboot.bunlong.site/api"
+  NEXT_PUBLIC_WEBSOCKET_URL: "https://chatspringboot.bunlong.site/ws"
+
+---
+# Service for Next.js Chat Application
+apiVersion: v1
+kind: Service
+metadata:
+  name: nextjs-app-service
+  namespace: production
+  labels:
+    app: nextjs-chat-app
+  annotations:
+    service.kubernetes.io/load-balancer-type: "nlb"
+    service.kubernetes.io/nlb-target-type: "instance"
+spec:
+  type: ClusterIP
+  ports:
+  - port: 8080
+    targetPort: 8080
+    protocol: TCP
+    name: http-nginx
+  selector:
+    app: nextjs-chat-app
+  sessionAffinity: None
+
+---
+# Ingress for external access via Cloudflare
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: nextjs-app-ingress
+  namespace: production
+  annotations:
+    # Use NGINX Ingress Controller
+    kubernetes.io/ingress.class: "nginx"
+
+    # Cloudflare handles HTTPS termination
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "false"
+    
+    # Large file uploads for chat media
+    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+    # WebSocket support for chat functionality
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "3600"
+    nginx.ingress.kubernetes.io/websocket-services: "nextjs-app-service"
+    
+    # Enable real IP forwarding
+    nginx.ingress.kubernetes.io/enable-cors: "true"
+    nginx.ingress.kubernetes.io/cors-allow-origin: "*"
+spec:
+  rules:
+  - host: chatnextjs.bunlong.site
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: nextjs-app-service
+            port:
+              number: 8080
+
+# ---
+# # HorizontalPodAutoscaler for auto-scaling
+# apiVersion: autoscaling/v2
+# kind: HorizontalPodAutoscaler
+# metadata:
+#   name: nextjs-app-hpa
+#   namespace: production
+#   labels:
+#     app: nextjs-chat-app
+#     created-by: BunlongCHEA
+#     created-date: "2025-11-05"
+#     last-updated: "2025-11-05-13:16:00"
+# spec:
+#   scaleTargetRef:
+#     apiVersion: apps/v1
+#     kind: Deployment
+#     name: nextjs-app-deployment
+#   minReplicas: 3
+#   maxReplicas: 15
+#   metrics:
+#   - type: Resource
+#     resource:
+#       name: cpu
+#       target:
+#         type: Utilization
+#         averageUtilization: 70
+#   - type: Resource
+#     resource:
+#       name: memory
+#       target:
+#         type: Utilization
+#         averageUtilization: 80
+#   behavior:
+#     scaleDown:
+#       stabilizationWindowSeconds: 300
+#       policies:
+#       - type: Percent
+#         value: 10
+#         periodSeconds: 60
+#       - type: Pods
+#         value: 2
+#         periodSeconds: 60
+#       selectPolicy: Min
+#     scaleUp:
+#       stabilizationWindowSeconds: 60
+#       policies:
+#       - type: Percent
+#         value: 50
+#         periodSeconds: 60
+#       - type: Pods
+#         value: 3
+#         periodSeconds: 60
+#       selectPolicy: Max
+
+# ---
+# # NetworkPolicy for Next.js Nginx application security
+# apiVersion: networking.k8s.io/v1
+# kind: NetworkPolicy
+# metadata:
+#   name: nextjs-app-network-policy
+#   namespace: production
+#   labels:
+#     app: nextjs-chat-app
+#     created-by: BunlongCHEA
+#     created-date: "2025-11-05"
+#     last-updated: "2025-11-05-13:16:00"
+# spec:
+#   podSelector:
+#     matchLabels:
+#       app: nextjs-chat-app
+#   policyTypes:
+#   - Ingress
+#   - Egress
+#   ingress:
+#   # Allow traffic from ingress controller
+#   - from:
+#     - namespaceSelector:
+#         matchLabels:
+#           name: ingress-nginx
+#     ports:
+#     - protocol: TCP
+#       port: 8080
+#   # Allow traffic from any pod in the same namespace
+#   - from:
+#     - namespaceSelector:
+#         matchLabels:
+#           name: production
+#     ports:
+#     - protocol: TCP
+#       port: 8080
+#   # Allow health checks from kubelet
+#   - from: []
+#     ports:
+#     - protocol: TCP
+#       port: 8080
+#   egress:
+#   # Allow connection to Spring Boot API (HTTPS)
+#   - to: []
+#     ports:
+#     - protocol: TCP
+#       port: 443  # HTTPS to external Spring Boot API
+#     - protocol: TCP
+#       port: 80   # HTTP fallback
+#   # Allow DNS resolution
+#   - to:
+#     - namespaceSelector:
+#         matchLabels:
+#           name: kube-system
+#     ports:
+#     - protocol: UDP
+#       port: 53
+#     - protocol: TCP
+#       port: 53
+#   # Allow WebSocket connections to Spring Boot backend
+#   - to: []
+#     ports:
+#     - protocol: TCP
+#       port: 8080  # WebSocket connection to backend

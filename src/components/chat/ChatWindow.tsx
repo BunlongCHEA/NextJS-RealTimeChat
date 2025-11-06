@@ -3,8 +3,18 @@
 import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '@/hooks/useAuth';
 import { ApiService } from '@/lib/api';
-import { ChatRoomDTO, ChatMessageDTO, EnumMessageType, EnumRoomType, EnumRoomRole, ParticipantDTO } from '@/types/chat';
-import { getChatRoomAvatar, getChatRoomDisplayName, formatMessageTime, getOnlineStatus } from '@/lib/chat-utils';
+import { 
+  ChatRoomDTO, 
+  ChatMessageDTO, 
+  EnumMessageType, 
+  EnumRoomType, 
+  EnumRoomRole, 
+  EnumStatus,
+  ParticipantDTO, 
+  UserStatusUpdate,
+  MessageStatusUpdate
+} from '@/types/chat';
+import { getChatRoomAvatar, getChatRoomDisplayName, formatMessageTime, getOnlineStatus, userStatus } from '@/lib/chat-utils';
 import { User } from '@/types/user';
 import Image from 'next/image';
 import { 
@@ -14,8 +24,14 @@ import {
   ArrowLeftIcon,
   FaceSmileIcon,
   PaperClipIcon,
-  ChatBubbleLeftRightIcon
+  ChatBubbleLeftRightIcon,
+  CheckIcon,
+  CheckCircleIcon,
+  EyeIcon
 } from '@heroicons/react/24/outline';
+import {
+  CheckCheck
+} from 'lucide-react';
 import { WebSocketService } from '@/lib/websocket';
 import ChatRoomOptionsMenu from './ChatRoomOptionsMenu';
 import router from 'next/router';
@@ -23,10 +39,12 @@ import router from 'next/router';
 interface ChatWindowProps {
   roomId: number;
   onBack?: () => void;
+  onRoomCreated?: (roomId: number) => void; // Add this prop to notify parent about new room
+  onMessageSent?: () => void; // Add this prop to refresh sidebar when message is sent
 }
 
-export default function ChatWindow({ roomId, onBack }: ChatWindowProps) {
-  const { user, loading: authLoading, token } = useAuth(); // Add token from useAuth
+export default function ChatWindow({ roomId, onBack, onRoomCreated, onMessageSent }: ChatWindowProps) {
+  const { user, loading: authLoading, token } = useAuth();
   const [chatRoom, setChatRoom] = useState<ChatRoomDTO | null>(null);
   const [messages, setMessages] = useState<ChatMessageDTO[]>([]);
   const [newMessage, setNewMessage] = useState('');
@@ -34,25 +52,21 @@ export default function ChatWindow({ roomId, onBack }: ChatWindowProps) {
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [wsConnected, setWsConnected] = useState(false);
-  const [wsConnectionAttempted, setWsConnectionAttempted] = useState(false);
+  const [messageStatuses, setMessageStatuses] = useState<Map<number, Map<number, EnumStatus>>>(new Map());
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const wsService = useRef(WebSocketService.getInstance());
   const [showOptionsMenu, setShowOptionsMenu] = useState(false);
-  const [currentUserParticipant, setCurrentUserParticipant] = useState<ParticipantDTO | null>(null); // Fixed type // To store current user's participant info
+  const [currentUserParticipant, setCurrentUserParticipant] = useState<ParticipantDTO | null>(null);
+  const [visibleMessages, setVisibleMessages] = useState<Set<number>>(new Set());
+  const intersectionObserver = useRef<IntersectionObserver | null>(null);
 
   useEffect(() => {
-    if (roomId && user) {
+    if (roomId && user && token) {
       loadChatRoom();
       loadMessages();
       connectWebSocket();
-      
-      // Only attempt WebSocket connection once authentication is confirmed
-      // if (!wsConnectionAttempted) {
-      //   connectWebSocket();
-      //   setWsConnectionAttempted(true);
-      // }
     }
 
     return () => {
@@ -60,22 +74,24 @@ export default function ChatWindow({ roomId, onBack }: ChatWindowProps) {
       if (wsService.current) {
         wsService.current.unsubscribeFromRoom(roomId);
       }
+
+      if (intersectionObserver.current) {
+        intersectionObserver.current.disconnect();
+      }
     };
-  }, [roomId, user, token, authLoading, wsConnectionAttempted]);
+  }, [roomId, user, token, authLoading]);
 
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
 
   useEffect(() => {
-    // Auto-resize textarea
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
       textareaRef.current.style.height = textareaRef.current.scrollHeight + 'px';
     }
   }, [newMessage]);
 
-  // Add useEffect to get current user's participant info
   useEffect(() => {
     if (user && chatRoom && chatRoom.participants) {
       const participant = chatRoom.participants.find(p => p.userId === user.id);
@@ -83,37 +99,234 @@ export default function ChatWindow({ roomId, onBack }: ChatWindowProps) {
     }
   }, [user, chatRoom]);
 
+  // Add periodic refresh (add to existing useEffect)
+  useEffect(() => {
+    if (chatRoom && user) {
+      const statusRefreshInterval = setInterval(() => {
+        refreshUserStatus();
+      }, 5000); // Refresh in seconds
+      
+      return () => clearInterval(statusRefreshInterval);
+    }
+  }, [chatRoom, user]);
 
-  const connectWebSocket = async () => {
-    if (!user || !token) {
-      console.log('Skipping WebSocket connection - no user or token');
+  // Set up intersection observer for message visibility
+  useEffect(() => {
+    if (intersectionObserver.current) {
+      intersectionObserver.current.disconnect();
+    }
+
+    intersectionObserver.current = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          const messageId = parseInt(entry.target.getAttribute('data-message-id') || '0');
+          if (entry.isIntersecting && messageId > 0) {
+            setVisibleMessages(prev => new Set([...prev, messageId]));
+            
+            // Auto-mark as read when message becomes visible (with small delay)
+            setTimeout(() => {
+              markMessageAsRead(messageId);
+            }, 1000); // 1 second delay to ensure user actually sees the message
+
+          } else if (!entry.isIntersecting && messageId > 0) {
+            setVisibleMessages(prev => {
+              const newSet = new Set(prev);
+              newSet.delete(messageId);
+              return newSet;
+            });
+          }
+        });
+      },
+      { 
+        threshold: 0.7,
+        rootMargin: '0px 0px -50px 0px'
+      }
+    );
+
+    return () => {
+      if (intersectionObserver.current) {
+        intersectionObserver.current.disconnect();
+      }
+    };
+  }, [user]);
+
+  // Auto-mark messages as delivered when they load
+  // Always fetch and display the backend status for all messages sent by the user
+  useEffect(() => {
+    if (messages.length > 0 && user) {
+      messages.forEach(async (message) => {
+        // For all messages sent by the current user, fetch their status
+        if (message.senderId === user.id && message.id > 0) {
+          try {
+            const existingStatus = await ApiService.getMessageStatusByUserAndMessage(user.id, message.id, false);
+            setMessageStatuses(prev => {
+              const newStatuses = new Map(prev);
+              if (!newStatuses.has(message.id)) {
+                newStatuses.set(message.id, new Map());
+              }
+              const messageStatusMap = newStatuses.get(message.id)!;
+              messageStatusMap.set(user.id, existingStatus.status);
+              return newStatuses;
+            });
+          } catch {
+            // If no status exists, do not set anything (will show as SENT by default)
+          }
+        } else if (message.senderId !== user.id && message.id > 0) {
+          // For received messages, keep previous logic (auto-mark as delivered if no status)
+          try {
+            try {
+              const existingStatus = await ApiService.getMessageStatusByUserAndMessage(user.id, message.id, true);
+              setMessageStatuses(prev => {
+                const newStatuses = new Map(prev);
+                if (!newStatuses.has(message.id)) {
+                  newStatuses.set(message.id, new Map());
+                }
+                const messageStatusMap = newStatuses.get(message.id)!;
+                messageStatusMap.set(user.id, existingStatus.status);
+                return newStatuses;
+              });
+            } catch {
+              await ApiService.createMessageStatus(user.id, message.id, EnumStatus.DELIVERED);
+              setMessageStatuses(prev => {
+                const newStatuses = new Map(prev);
+                if (!newStatuses.has(message.id)) {
+                  newStatuses.set(message.id, new Map());
+                }
+                const messageStatusMap = newStatuses.get(message.id)!;
+                messageStatusMap.set(user.id, EnumStatus.DELIVERED);
+                return newStatuses;
+              });
+            }
+          } catch (error) {
+            console.error('Failed to process message status:', error);
+          }
+        }
+      });
+    }
+  }, [messages, user]);
+
+  // Message Status Handling
+
+  // Mark messages as read when they become visible
+  const markMessageAsRead = async (messageId: number) => {
+    if (!user || !messageId || messageId < 0) {
+      console.log(`[ChatWindow] Skipping read status for invalid messageId: ${messageId}`);
       return;
     }
 
-    try {
-      console.log(`[${new Date().toISOString()}] Starting WebSocket connection for user: ${user.username}`);
+    const message = messages.find(m => m.id === messageId);
+    console.log(`[ChatWindow] markMessageAsRead called for messageId: ${messageId}`, message);
+    // if (!message || message.senderId === user.id) {
+    //   console.log(`[ChatWindow] Skipping read status - message not found or user is sender`);
+    //   return; // Don't mark own messages as read
+    // }
 
+    // Don't mark own messages as read
+    // if (!message || message.senderId === user.id) {
+    //   console.log(`[ChatWindow] Skipping read status - message not found or user is sender`);
+    //   return;
+    // }
+
+    try {
+      // console.log(`[ChatWindow] Marking message ${messageId} as read for user ${user.id}`);
+      
+      // Check if status already exists and is not READ
+      try {
+        const existingStatus = await ApiService.getMessageStatusByUserAndMessage(user.id, messageId, true);
+        if (existingStatus.status === EnumStatus.READ) {
+          console.log(`[ChatWindow] Message ${messageId} already marked as read`);
+          return;
+        }
+
+        // Update existing status to READ
+        await ApiService.updateMessageStatus(user.id, messageId, EnumStatus.READ);
+        // console.log(`[ChatWindow] Updated message ${messageId} status to READ and user ${user.id}`);
+        
+      } catch (error) {
+        // Status doesn't exist, create it as read
+        console.log(`[ChatWindow] Creating read status for message ${messageId}`);
+        // await ApiService.createMessageStatus(user.id, messageId, EnumStatus.READ);
+      }
+      
+      // Update local state
+      setMessageStatuses(prev => {
+        const newStatuses = new Map(prev);
+        if (!newStatuses.has(messageId)) {
+          newStatuses.set(messageId, new Map());
+        }
+        const messageStatusMap = newStatuses.get(messageId)!;
+        messageStatusMap.set(user.id, EnumStatus.READ);
+        return newStatuses;
+      });
+
+      if (onMessageSent) {
+        onMessageSent();
+      }
+
+    } catch (error) {
+      console.error('Failed to mark message as read:', error);
+    }
+  };
+
+  // Add this function inside ChatWindow component
+  const refreshUserStatus = async () => {
+    if (!chatRoom || !user) return;
+    
+    try {
+      // Reload chat room to get fresh participant data
+      const updatedRoom = await ApiService.getChatRoomById(roomId);
+      setChatRoom(updatedRoom);
+    } catch (error) {
+      console.error('Failed to refresh user status:', error);
+    }
+  };
+
+  // WebSocket connection and subscriptions
+
+  const connectWebSocket = async () => {
+    if (!user || !token) return;
+
+    try {
       await wsService.current.connect(token);
       setWsConnected(true);
-      setError(null); // Clear any previous connection errors
-
-      // const token = localStorage.getItem('token');
-      // if (!token) {
-      //   setError('No authentication token found');
-      //   return;
-      // }
-
-      // await wsService.current.connect(token);
-      // setWsConnected(true);
+      setError(null);
 
       // Subscribe to room messages
       wsService.current.subscribeToRoom(roomId, (message: ChatMessageDTO) => {
+        console.log(`[ChatWindow] Received message in room ${roomId}:`, message);
+        
         setMessages(prev => {
-          // Avoid duplicates
           const exists = prev.some(m => m.id === message.id);
           if (exists) return prev;
           return [...prev, message];
         });
+
+        // Auto-mark new messages as delivered
+        if (message.senderId !== user.id  && message.id > 0) {
+          setTimeout(async () => {
+            try {
+              // Current user is receiving the message, so they are the "received" user
+              await ApiService.createMessageStatus(user.id, message.id, EnumStatus.DELIVERED);
+              console.log(`[ChatWindow] Marked message ${message.id} as delivered for user ${user.id}`);
+              setMessageStatuses(prev => {
+                const newStatuses = new Map(prev);
+                if (!newStatuses.has(message.id)) {
+                  newStatuses.set(message.id, new Map());
+                }
+                const messageStatusMap = newStatuses.get(message.id)!;
+                messageStatusMap.set(user.id, EnumStatus.DELIVERED);
+                return newStatuses;
+              });
+            } catch (error) {
+              console.error('Failed to mark new message as delivered:', error);
+            }
+          }, 500);
+        }
+
+        // Notify parent to refresh sidebar when new message arrives
+        if (onMessageSent) {
+          onMessageSent();
+        }
       });
 
       // Subscribe to error messages
@@ -121,20 +334,67 @@ export default function ChatWindow({ roomId, onBack }: ChatWindowProps) {
         setError(errorMessage);
       });
 
-      console.log(`[${new Date().toISOString()}] WebSocket connected successfully`);
+      // Subscribe to room status updates
+      wsService.current.subscribeToUserOrMessageStatus(roomId, (update: UserStatusUpdate | MessageStatusUpdate) => {
+        if ('type' in update && update.type === 'MESSAGE_STATUS_UPDATE') {
+          handleMessageStatusUpdate(update);
+        } else if ('username' in update) {
+          handleUserStatusUpdate(update as UserStatusUpdate);
+        }
+      });
+
+      console.log(`[ChatWindow] Connected to WebSocket and subscribed to room ${roomId}`);
 
     } catch (error) {
       console.error('WebSocket connection failed:', error);
       setError('Failed to connect to chat server');
       setWsConnected(false);
 
-      // Retry connection after delay
       setTimeout(() => {
         if (user && token) {
-          setWsConnectionAttempted(false); // Allow retry
+          connectWebSocket();
         }
       }, 3000);
     }
+  };
+
+  const handleUserStatusUpdate = (update: UserStatusUpdate) => {
+    if (chatRoom && chatRoom.participants) {
+      setChatRoom(prev => {
+        if (!prev) return prev;
+        
+        const updatedParticipants = prev.participants?.map(participant => {
+          if (participant.userId === update.userId) {
+            return {
+              ...participant,
+              online: update.online,
+              lastSeen: update.lastSeen
+            };
+          }
+          return participant;
+        });
+
+        return {
+          ...prev,
+          participants: updatedParticipants
+        };
+      });
+    }
+  };
+
+  const handleMessageStatusUpdate = (update: MessageStatusUpdate) => {
+    setMessageStatuses(prev => {
+      const newStatuses = new Map(prev);
+      
+      if (!newStatuses.has(update.messageId)) {
+        newStatuses.set(update.messageId, new Map());
+      }
+      
+      const messageStatusMap = newStatuses.get(update.messageId)!;
+      messageStatusMap.set(update.userId, update.status as EnumStatus);
+      
+      return newStatuses;
+    });
   };
 
   const loadChatRoom = async () => {
@@ -142,10 +402,14 @@ export default function ChatWindow({ roomId, onBack }: ChatWindowProps) {
       setError(null);
       const room = await ApiService.getChatRoomById(roomId);
       setChatRoom(room);
+      
+      // Notify parent about room creation if this is a new room
+      if (onRoomCreated) {
+        onRoomCreated(room.id);
+      }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Failed to load chat room';
       setError(errorMessage);
-      console.error('Failed to load chat room:', error);
     }
   };
 
@@ -162,21 +426,15 @@ export default function ChatWindow({ roomId, onBack }: ChatWindowProps) {
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Failed to load messages';
       setError(errorMessage);
-      console.error('Failed to load messages:', error);
     } finally {
       setLoading(false);
     }
   };
 
-
-  // Helper & Functionality methods
-
-  // Handle scrolling to bottom 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
-  // Handle sending messages
   const sendMessage = async () => {
     if (!newMessage.trim() || sending || !user || !wsConnected) return;
 
@@ -185,18 +443,21 @@ export default function ChatWindow({ roomId, onBack }: ChatWindowProps) {
 
     try {
       setSending(true);
-      // Send via WebSocket instead of HTTP API
       wsService.current.sendTextMessage(roomId, messageContent);
+      
+      // Notify parent to refresh sidebar
+      if (onMessageSent) {
+        onMessageSent();
+      }
     } catch (error) {
       console.error('Failed to send message:', error);
-      setNewMessage(messageContent); // Restore message on error
+      setNewMessage(messageContent);
       setError(error instanceof Error ? error.message : 'Failed to send message');
     } finally {
       setSending(false);
     }
   };
 
-  // Handle Enter key press in textarea for sending message
   const handleKeyPress = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
@@ -204,15 +465,18 @@ export default function ChatWindow({ roomId, onBack }: ChatWindowProps) {
     }
   };
 
-  // Handle image upload
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !user || !wsConnected) return;
 
     try {
       setSending(true);
-      // Send via WebSocket instead of HTTP API
       await wsService.current.sendImageMessage(roomId, file);
+      
+      // Notify parent to refresh sidebar
+      if (onMessageSent) {
+        onMessageSent();
+      }
     } catch (error) {
       console.error('Failed to send image:', error);
       setError(error instanceof Error ? error.message : 'Failed to send image');
@@ -224,63 +488,99 @@ export default function ChatWindow({ roomId, onBack }: ChatWindowProps) {
     }
   };
 
-  // Handle room updates and leaving
   const handleRoomUpdated = (updatedRoom: ChatRoomDTO) => {
     setChatRoom(updatedRoom);
     setShowOptionsMenu(false);
-    
     loadChatRoom();
     loadMessages();
   };
 
-  // Handle leaving the room
   const handleRoomLeft = () => {
     setShowOptionsMenu(false);
 
     try {
-      // Clear current room state
       setChatRoom(null);
       setMessages([]);
 
-      // Disconnect from WebSocket for this room
-      if (wsService.current) {
-        wsService.current.unsubscribeFromRoom(roomId);
-      }
+      // if (wsService.current) {
+      //   wsService.current.unsubscribeFromRoom(roomId);
+      // }
 
-      // If onBack function exists (from sidebar), use it to refresh sidebar
       if (onBack) {
         onBack();
-        // Wait a moment then navigate to chat list
         setTimeout(() => {
+          console.log('Navigate back to chat list');
           window.location.href = '/chat';
+          // router.push('/chat');
         }, 300);
-      } 
-
+      }
     } catch (error) {
       console.error('Error handling room leave:', error);
-      // Fallback: force page refresh
       window.location.reload();
     }
   };
 
-    // Check if user can send messages
   const canSendMessage = () => {
     if (!user || !chatRoom || !currentUserParticipant) return false;
     
-    // For CHANNEL: Only ADMIN can send messages
     if (chatRoom.type === EnumRoomType.CHANNEL) {
       return currentUserParticipant.role === EnumRoomRole.ADMIN;
     }
     
-    // For PERSONAL and GROUP: All participants can send messages
     return true;
+  };
+
+  const getMessageStatusIcon = (message: ChatMessageDTO) => {
+    if (message.senderId !== user?.id) return null;
+
+    const messageStatusMap = messageStatuses.get(message.id);
+    if (!messageStatusMap || messageStatusMap.size === 0) {
+      // return <CheckIcon className="w-3 h-3 text-gray-400" />;
+      // Message just sent, no delivery confirmation yet
+      return (
+        <div className="flex items-center">
+          <div className="w-2 h-2 bg-yellow-800 rounded-full" title="Sent"></div>
+        </div>
+      );
+    }
+
+    // Check if anyone has read the message
+    const hasRead = Array.from(messageStatusMap.values()).some(status => status === EnumStatus.READ);
+    if (hasRead) {
+      // return <EyeIcon className="w-3 h-3 text-blue-500" />;
+      return (
+        <div className="flex items-center space-x-0.5" title="Read">
+          {/* <CheckIcon className="w-3 h-3 text-yellow-500" />
+          <CheckIcon className="w-3 h-3 text-yellow-500 -ml-1" /> */}
+          <CheckCheck className="w-3 h-3 text-yellow-800" />
+        </div>
+      );
+    }
+
+    // Check if anyone has received the message
+    const hasDelivered = Array.from(messageStatusMap.values()).some(status => status === EnumStatus.DELIVERED);
+    if (hasDelivered) {
+      // return <CheckCircleIcon className="w-3 h-3 text-green-500" />;
+      return (
+        <div className="flex items-center" title="Delivered">
+          <CheckIcon className="w-3 h-3 text-yellow-800" />
+        </div>
+      );
+    }
+
+    // return <CheckIcon className="w-3 h-3 text-gray-400" />;
+    // Default: just sent
+    return (
+      <div className="flex items-center">
+        <div className="w-2 h-2 bg-yellow-800 rounded-full" title="Sent"></div>
+      </div>
+    );
   };
 
   const renderMessage = (message: ChatMessageDTO) => {
     const isOwn = message.senderId === user?.id;
     const showSender = !isOwn && chatRoom?.type !== EnumRoomType.PERSONAL;
 
-    // Handle system messages differently
     if (message.type === EnumMessageType.SYSTEM) {
       return (
         <div key={message.id} className="flex justify-center mb-2">
@@ -294,9 +594,14 @@ export default function ChatWindow({ roomId, onBack }: ChatWindowProps) {
     return (
       <div
         key={message.id}
+        data-message-id={message.id}
+        ref={(el) => { // Add this ref
+          if (el && intersectionObserver.current && !isOwn) {
+            intersectionObserver.current.observe(el);
+          }
+        }}
         className={`flex ${isOwn ? 'justify-end' : 'justify-start'} mb-4`}
       >
-        {/* Avatar for non-own messages in group/channel */}
         {!isOwn && chatRoom?.type !== EnumRoomType.PERSONAL && (
           <div className="flex-shrink-0 mr-3">
             <Image
@@ -316,14 +621,12 @@ export default function ChatWindow({ roomId, onBack }: ChatWindowProps) {
               : 'bg-gray-200 text-gray-900 rounded-r-lg rounded-tl-lg'
           } px-4 py-2 shadow-sm`}
         >
-          {/* Sender info for group chats */}
           {showSender && (
             <div className="text-xs font-medium mb-1 text-blue-600">
               {message.senderFullName || message.senderUsername}
             </div>
           )}
 
-          {/* Message content */}
           {message.type === EnumMessageType.IMAGE && message.attachmentUrls?.length > 0 ? (
             <div>
               {message.attachmentUrls.map((url, index) => (
@@ -364,40 +667,62 @@ export default function ChatWindow({ roomId, onBack }: ChatWindowProps) {
             <div className="whitespace-pre-wrap">{message.content}</div>
           )}
 
-          {/* Timestamp */}
-          <div
-            className={`text-xs mt-1 ${
-              isOwn
-                ? 'text-blue-200'
-                : 'text-gray-500'
-            }`}
-          >
-            {formatMessageTime(message.timestamp)}
+          <div className="flex items-center justify-between mt-1">
+            <div
+              className={`text-xs ${
+                isOwn
+                  ? 'text-blue-200'
+                  : 'text-gray-500'
+              }`}
+            >
+              {formatMessageTime(message.timestamp)}
+            </div>
+            
+            {isOwn && (
+              <div className="ml-2">
+                {getMessageStatusIcon(message)}
+              </div>
+            )}
           </div>
         </div>
       </div>
     );
   };
 
+  // Handle User Status Online/Offline Indicator
+
   const getSubtitle = () => {
     if (!chatRoom) return '';
     
-    const wsStatus = wsService.current.getConnectionStatus();
+    // const wsStatus = wsService.current.getConnectionStatus();
     let statusIndicator = '';
     
     if (chatRoom.type === EnumRoomType.PERSONAL && chatRoom.participants) {
       const otherParticipant = chatRoom.participants.find(p => p.userId !== user?.id);
+      
       if (otherParticipant) {
-        statusIndicator = getOnlineStatus(otherParticipant.online, otherParticipant.lastSeen);
+        // Use userStatus function
+        const { text } = userStatus(otherParticipant.online, otherParticipant.lastSeen);
+        statusIndicator = text;
+        // statusIndicator = getOnlineStatus(otherParticipant.online, otherParticipant.lastSeen);
+        // statusIndicator = userStatus(otherParticipant.online, otherParticipant.lastSeen).text;
       }
+
+      // For personal, do NOT add websocket status to subtitle
+      return statusIndicator;
+
     } else if (chatRoom.type === EnumRoomType.GROUP) {
       const memberCount = chatRoom.participants?.length || 0;
-      statusIndicator = `${memberCount} members`;
+      const onlineCount = chatRoom.participants?.filter(p => p.online).length || 0;
+      statusIndicator = `${memberCount} members, ${onlineCount} online`;
+
     } else if (chatRoom.type === EnumRoomType.CHANNEL) {
       const subscriberCount = chatRoom.participants?.length || 0;
       statusIndicator = `${subscriberCount} subscribers`;
     }
-    
+
+    // For group/channel, you may still want to show connection status
+    const wsStatus = wsService.current.getConnectionStatus();
     return `${statusIndicator} • ${wsStatus}`;
   };
 
@@ -476,7 +801,6 @@ export default function ChatWindow({ roomId, onBack }: ChatWindowProps) {
   const displayName = getChatRoomDisplayName(chatRoom, user!);
   const avatarUrl = getChatRoomAvatar(chatRoom, user!);
   
-  // Check if message input should be disabled
   const isMessageInputDisabled = !canSendMessage();
   const messageInputPlaceholder = isMessageInputDisabled 
     ? `Only admins can send messages in this ${chatRoom.type.toLowerCase()}`
@@ -491,13 +815,12 @@ export default function ChatWindow({ roomId, onBack }: ChatWindowProps) {
             {onBack && (
               <button
                 onClick={onBack}
-                className="p-2 hover:bg-gray-100 rounded-lg md:hidden transition-colors"
+                className="p-2 hover:bg-blue-500 rounded-lg transition-colors"
               >
-                <ArrowLeftIcon className="w-5 h-5" />
+                <ArrowLeftIcon className="w-5 h-5 text-black" />
               </button>
             )}
             
-            {/* Avatar */}
             <Image
               src={avatarUrl || `https://ui-avatars.com/api/?name=${encodeURIComponent(displayName)}&background=random`}
               alt={displayName}
@@ -509,21 +832,61 @@ export default function ChatWindow({ roomId, onBack }: ChatWindowProps) {
               }}
             />
 
-            {/* Chat Info */}
             <div className="min-w-0">
               <h2 className="font-semibold text-gray-900 truncate">{displayName}</h2>
               <p className="text-sm text-gray-500 truncate">
                 {getSubtitle()}
-                <span className={`ml-2 inline-block w-2 h-2 rounded-full ${
+                {/* Show online/offline dot for personal chat */}
+                {chatRoom?.type === EnumRoomType.PERSONAL && chatRoom.participants && (() => {
+                  const other = chatRoom.participants.find(p => p.userId !== user?.id);
+                  if (!other) return null;
+                  const { dot } = userStatus(other.online, other.lastSeen);
+                  return (
+                    <span
+                      className={`ml-2 inline-block w-2 h-2 rounded-full ${dot}`}
+                      title={userStatus(other.online, other.lastSeen).text}
+                    ></span>
+                  );
+                })()}
+                {/* For group/channel, keep the ws dot */}
+                {chatRoom && chatRoom.type !== EnumRoomType.PERSONAL && (
+                  <span className={`ml-2 inline-block w-2 h-2 rounded-full ${
+                    wsConnected ? 'bg-green-500' : 
+                    wsService.current.getConnectionStatus().includes('Reconnecting') ? 'bg-yellow-500' : 
+                    'bg-red-500'
+                  }`}></span>
+                )}
+
+                {/* <span className={`ml-2 inline-block w-2 h-2 rounded-full 
+                ${
                   wsConnected ? 'bg-green-500' : 
                   wsService.current.getConnectionStatus().includes('Reconnecting') ? 'bg-yellow-500' : 
                   'bg-red-500'
-                }`}></span>
+                }`}></span> */}
+
+                {/* Show online/offline dot for personal chat */}
+                {/* {chatRoom?.type === EnumRoomType.PERSONAL && chatRoom.participants && (() => {
+                  const other = chatRoom.participants.find(p => p.userId !== user?.id);
+                  if (!other) return null;
+                  return (
+                    <span
+                      className={`ml-2 inline-block w-2 h-2 rounded-full ${other.online ? 'bg-green-500' : 'bg-gray-400'}`}
+                      title={other.online ? 'Online' : 'Offline'}
+                    ></span>
+                  );
+                })()} */}
+                {/* For group/channel, you can keep the ws dot if you want */}
+                {/* {chatRoom && chatRoom.type !== EnumRoomType.PERSONAL && (
+                  <span className={`ml-2 inline-block w-2 h-2 rounded-full ${
+                    wsConnected ? 'bg-green-500' : 
+                    wsService.current.getConnectionStatus().includes('Reconnecting') ? 'bg-yellow-500' : 
+                    'bg-red-500'
+                  }`}></span>
+                )} */}
               </p>
             </div>
           </div>
 
-          {/* Options Menu - Only show for GROUP and CHANNEL */}
           {chatRoom && (chatRoom.type === EnumRoomType.GROUP || chatRoom.type === EnumRoomType.CHANNEL) && (
             <div className="relative">
               <button 
@@ -582,7 +945,6 @@ export default function ChatWindow({ roomId, onBack }: ChatWindowProps) {
 
       {/* Message Input */}
       <div className="p-4 border-t border-gray-200 bg-white flex-shrink-0">
-        {/* Show warning for channels when user can't send messages */}
         {chatRoom.type === EnumRoomType.CHANNEL && isMessageInputDisabled && (
           <div className="mb-3 p-3 bg-amber-50 border border-amber-200 rounded-lg">
             <div className="flex items-center space-x-2 text-amber-800">
@@ -594,7 +956,6 @@ export default function ChatWindow({ roomId, onBack }: ChatWindowProps) {
         )}
 
         <div className="flex items-end space-x-3">
-          {/* File upload */}
           <button
             onClick={() => fileInputRef.current?.click()}
             disabled={sending || !wsConnected || isMessageInputDisabled}
@@ -610,7 +971,6 @@ export default function ChatWindow({ roomId, onBack }: ChatWindowProps) {
             className="hidden"
           />
 
-          {/* Text input */}
           <div className="flex-1 relative">
             <textarea
               ref={textareaRef}
@@ -620,16 +980,14 @@ export default function ChatWindow({ roomId, onBack }: ChatWindowProps) {
               placeholder={messageInputPlaceholder}
               rows={1}
               disabled={!wsConnected || isMessageInputDisabled}
-              className="w-full px-4 py-2 pr-12 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none max-h-32 overflow-y-auto disabled:bg-gray-100 disabled:cursor-not-allowed disabled:text-gray-500"
+              className="w-full px-4 py-2 pr-12 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none max-h-32 overflow-y-auto disabled:bg-gray-100 disabled:cursor-not-allowed disabled:text-gray-500 text-black"
               style={{ minHeight: '40px' }}
             />
             
-            {/* Emoji button */}
             <button
               className="absolute right-3 bottom-2 p-1 text-gray-400 hover:text-gray-600 transition-colors disabled:opacity-50"
               disabled={isMessageInputDisabled}
               onClick={() => {
-                // TODO: Implement emoji picker
                 console.log('Open emoji picker');
               }}
             >
@@ -637,7 +995,6 @@ export default function ChatWindow({ roomId, onBack }: ChatWindowProps) {
             </button>
           </div>
 
-          {/* Send button */}
           <button
             onClick={sendMessage}
             disabled={!newMessage.trim() || sending || !wsConnected || isMessageInputDisabled}

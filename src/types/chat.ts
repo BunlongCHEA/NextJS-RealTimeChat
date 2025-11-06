@@ -114,13 +114,15 @@ export interface ChatMessageDTO {
 
 export interface MessageStatus {
   id: number;
-  users: User; // matches Spring Boot relationship name
+  usersReceived: User; // User who received the message
+  usersSent: User; // User who sent the message
   chatMessages: ChatMessageDTO; // matches Spring Boot relationship name
   status: EnumStatus;
   timestamp: string; // ISO string from Instant
   
   // Transient fields from Spring Boot
-  userId: number;
+  userReceivedId: number;
+  userSentId: number;
   messageId: number;
 }
 
@@ -157,7 +159,6 @@ export interface ParticipantDTO {
   joinDate: string;
   lastReadMessageId?: number;
 }
-
 
 // Request/Response DTOs for API calls
 export interface CreateChatRoomRequest {
@@ -196,4 +197,42 @@ export interface PageResponse<T> {
   number: number;
   first: boolean;
   last: boolean;
+}
+
+
+// Web socket for broadcast events
+export interface ChatRoomBroadcast {
+  type: 'NEW_CHAT_ROOM';
+  chatRoom: ChatRoomDTO;
+  timestamp: string;
+}
+
+export interface ParticipantAddedBroadcast {
+  type: 'PARTICIPANT_ADDED';
+  chatRoomId: number;
+  participant: ParticipantDTO;
+  addedBy: string;
+  timestamp: string;
+}
+
+export interface AddedToChatRoomBroadcast {
+  type: 'ADDED_TO_CHAT_ROOM';
+  chatRoomId: number;
+  addedBy: string;
+  timestamp: string;
+}
+
+export interface UserStatusUpdate {
+  userId: number;
+  username: string;
+  online: boolean;
+  lastSeen: string;
+}
+
+export interface MessageStatusUpdate {
+  type: 'MESSAGE_STATUS_UPDATE';
+  messageId: number;
+  userId: number;
+  status: string; // EnumStatus
+  timestamp: string;
 }
