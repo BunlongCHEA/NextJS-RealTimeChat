@@ -30,7 +30,7 @@ FROM node:25-alpine AS runner
 # FROM nginx:1.29.3-alpine AS runner
 
 # Install curl for health checks, nginx, and other utilities
-RUN apk add --no-cache nginx curl supervisor
+RUN apk add --no-cache nginx curl
 
 # Create app user
 # RUN addgroup --system --gid 1001 nodejs
@@ -47,18 +47,19 @@ COPY --from=builder /app/package.json ./package.json
 
 # Copy custom nginx configuration
 COPY nginx.conf /etc/nginx/nginx.conf
+COPY start.sh /start.sh
 
 # Copy supervisor configuration
-COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+# COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 
-# Create directories (as root - no permission issues)
-RUN mkdir -p /var/cache/nginx/client_temp \
+# Make script executable and create directories
+RUN chmod +x /start.sh && \
+    mkdir -p /var/cache/nginx/client_temp \
              /var/cache/nginx/proxy_temp \
              /var/cache/nginx/fastcgi_temp \
              /var/cache/nginx/uwsgi_temp \
              /var/cache/nginx/scgi_temp \
              /var/log/nginx \
-             /var/log/supervisor \
              /run/nginx
 
 # Expose port
@@ -66,16 +67,19 @@ EXPOSE 8080 3000
 
 # Set environment variables
 ENV PORT=3000
-# ENV HOSTNAME="0.0.0.0"
+ENV HOSTNAME="0.0.0.0"
 ENV NODE_ENV=production
-ENV NEXT_TELEMETRY_DISABLED=1
+# ENV NEXT_TELEMETRY_DISABLED=1
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=60s --retries=3 \
   CMD curl -f http://localhost:8080/health || exit 1
 
+# Start services
+CMD ["/start.sh"]
+
 # Start supervisor (manages both nginx and node.js)
-CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]
+# CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]
 
 # Start nginx in foreground
 # CMD ["nginx", "-g", "daemon off;"]
