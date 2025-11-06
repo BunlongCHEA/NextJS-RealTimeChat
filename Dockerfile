@@ -52,16 +52,7 @@ COPY start.sh /start.sh
 # Copy supervisor configuration
 # COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 
-# # Make script executable and create directories
-# RUN chmod +x /start.sh && \
-#     mkdir -p /var/cache/nginx/client_temp \
-#              /var/cache/nginx/proxy_temp \
-#              /var/cache/nginx/fastcgi_temp \
-#              /var/cache/nginx/uwsgi_temp \
-#              /var/cache/nginx/scgi_temp \
-#              /var/log/nginx \
-#              /run/nginx
-# Create ALL directories with 777 permissions (as root)
+# Create ALL directories with 777 permissions AND fix /var/run
 RUN mkdir -p /var/cache/nginx/client_temp \
              /var/cache/nginx/proxy_temp \
              /var/cache/nginx/fastcgi_temp \
@@ -70,14 +61,17 @@ RUN mkdir -p /var/cache/nginx/client_temp \
              /var/log/nginx \
              /var/lib/nginx \
              /var/lib/nginx/logs \
-             /var/run/nginx && \
+             /run/nginx \
+             /app/logs && \
     chmod -R 777 /var/cache/nginx && \
     chmod -R 777 /var/log/nginx && \
     chmod -R 777 /var/lib/nginx && \
-    chmod -R 777 /var/run/nginx && \
+    chmod -R 777 /run/nginx && \
+    chmod -R 777 /var/run && \
+    chmod -R 777 /app && \
     chmod +x /start.sh && \
-    touch /var/log/nginx/error.log /var/log/nginx/access.log && \
-    chmod 777 /var/log/nginx/error.log /var/log/nginx/access.log
+    touch /var/log/nginx/error.log /var/log/nginx/access.log /app/logs/nginx.pid && \
+    chmod 777 /var/log/nginx/error.log /var/log/nginx/access.log /app/logs/nginx.pid
 
 # Expose port
 EXPOSE 8080 3000
