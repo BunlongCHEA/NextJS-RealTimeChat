@@ -63,7 +63,7 @@ const nextConfig: NextConfig = {
   // },
 
   images: {
-    // unoptimized: true, // Disable image optimization for static export
+    unoptimized: true, // Disable image optimization for static export, and to avoid GET 400 errors -- https://chatnextjs.bunlong.site/_next/image?url=***
     remotePatterns: [
       {
         protocol: 'https',
