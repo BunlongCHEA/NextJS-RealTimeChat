@@ -32,8 +32,8 @@ RUN apk add --no-cache curl
 # RUN rm -rf /usr/share/nginx/html/*
 
 # Copy built Next.js static files from builder stage
-COPY --from=builder /app/out /usr/share/nginx/html
-COPY --from=builder /app/public /usr/share/nginx/html
+# COPY --from=builder /app/out /usr/share/nginx/html
+# COPY --from=builder /app/public /usr/share/nginx/html
 
 # Copy custom nginx configuration
 COPY nginx.conf /etc/nginx/nginx.conf
