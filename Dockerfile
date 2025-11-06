@@ -52,15 +52,31 @@ COPY start.sh /start.sh
 # Copy supervisor configuration
 # COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 
-# Make script executable and create directories
-RUN chmod +x /start.sh && \
-    mkdir -p /var/cache/nginx/client_temp \
+# # Make script executable and create directories
+# RUN chmod +x /start.sh && \
+#     mkdir -p /var/cache/nginx/client_temp \
+#              /var/cache/nginx/proxy_temp \
+#              /var/cache/nginx/fastcgi_temp \
+#              /var/cache/nginx/uwsgi_temp \
+#              /var/cache/nginx/scgi_temp \
+#              /var/log/nginx \
+#              /run/nginx
+# Create ALL directories with 777 permissions (as root)
+RUN mkdir -p /var/cache/nginx/client_temp \
              /var/cache/nginx/proxy_temp \
              /var/cache/nginx/fastcgi_temp \
              /var/cache/nginx/uwsgi_temp \
              /var/cache/nginx/scgi_temp \
              /var/log/nginx \
-             /run/nginx
+             /var/lib/nginx \
+             /var/lib/nginx/logs \
+             /run/nginx && \
+    chmod -R 777 /var/cache/nginx && \
+    chmod -R 777 /var/log/nginx && \
+    chmod -R 777 /var/lib/nginx && \
+    chmod +x /start.sh && \
+    touch /var/log/nginx/error.log /var/log/nginx/access.log && \
+    chmod 777 /var/log/nginx/error.log /var/log/nginx/access.log
 
 # Expose port
 EXPOSE 8080 3000
@@ -69,7 +85,7 @@ EXPOSE 8080 3000
 ENV PORT=3000
 ENV HOSTNAME="0.0.0.0"
 ENV NODE_ENV=production
-# ENV NEXT_TELEMETRY_DISABLED=1
+ENV NEXT_TELEMETRY_DISABLED=1
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=60s --retries=3 \
