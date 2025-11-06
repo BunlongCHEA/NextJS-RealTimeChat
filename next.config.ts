@@ -13,10 +13,10 @@ const nextConfig: NextConfig = {
   // External packages for server components
   serverExternalPackages: ['@stomp/stompjs', 'sockjs-client'],
 
-  // Enable experimental features
-  experimental: {
-    serverComponentsExternalPackages: ['@stomp/stompjs', 'sockjs-client'],
-  },
+  // // Enable experimental features
+  // experimental: {
+  //   serverComponentsExternalPackages: ['@stomp/stompjs', 'sockjs-client'],
+  // },
 
   // Allow WebSocket connections with enhanced headers
   async headers() {
