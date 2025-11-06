@@ -70,10 +70,11 @@ RUN mkdir -p /var/cache/nginx/client_temp \
              /var/log/nginx \
              /var/lib/nginx \
              /var/lib/nginx/logs \
-             /run/nginx && \
+             /var/run/nginx && \
     chmod -R 777 /var/cache/nginx && \
     chmod -R 777 /var/log/nginx && \
     chmod -R 777 /var/lib/nginx && \
+    chmod -R 777 /var/run/nginx && \
     chmod +x /start.sh && \
     touch /var/log/nginx/error.log /var/log/nginx/access.log && \
     chmod 777 /var/log/nginx/error.log /var/log/nginx/access.log
