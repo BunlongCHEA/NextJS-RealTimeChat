@@ -2,7 +2,7 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   // Enable static export for nginx
-  output: 'export',
+  // output: 'export',
 
   // Disable React Strict Mode for WebSocket connections
   reactStrictMode: false,

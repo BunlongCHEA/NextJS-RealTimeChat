@@ -6,6 +6,17 @@ import { useRouter, useParams } from 'next/navigation';
 import ChatSidebar from '@/components/chat/ChatSidebar';
 import ChatWindow from '@/components/chat/ChatWindow';
 
+// // Generate static params for pre-built routes
+// export async function generateStaticParams() {
+//   // Generate static pages for common room IDs (1-100)
+//   // You can adjust this range based on your needs
+//   const roomIds = Array.from({ length: 999999 }, (_, i) => i + 1);
+  
+//   return roomIds.map((id) => ({
+//     roomId: id.toString(),
+//   }));
+// }
+
 // Define the ref type for ChatSidebar
 interface ChatSidebarRef {
   refreshChatRooms: () => void;

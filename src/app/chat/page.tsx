@@ -32,7 +32,8 @@ export default function ChatPage() {
   //   }
   //   // Automatically select and navigate to the new room
   //   setSelectedRoomId(roomId);
-  //   router.push(`/chat/${roomId}`);
+  ////   router.push(`/chat/${roomId}`);
+// router.push(`/chat/room?room=${roomId}`);
   // };
 
   // // Handle when a message is sent (from ChatWindow)
@@ -72,6 +73,7 @@ export default function ChatPage() {
           onRoomSelect={(roomId) => {
             setSelectedRoomId(roomId);
             router.push(`/chat/${roomId}`);
+            // router.push(`/chat/room?room=${roomId}`);
             setShowSidebar(false); // Hide sidebar on mobile after selection
           }}
           // onRoomCreated={handleRoomCreated} // Pass room creation handler

@@ -4,11 +4,6 @@ import { AddedToChatRoomBroadcast, ChatMessageDTO, ChatRoomBroadcast, MessageSta
 import { Client, StompSubscription, IFrame, IMessage } from '@stomp/stompjs';
 import SockJS from 'sockjs-client';
 
-interface WebSocketError {
-  message: string;
-  code?: string;
-}
-
 interface ConnectionStateCallback {
   (connected: boolean, status: string): void;
 }
@@ -30,6 +25,33 @@ export class WebSocketService {
     return WebSocketService.instance;
   }
 
+  // Get WebSocket URL from environment with fallback
+  // private getWebSocketUrl(): string {
+  //   // Priority order: environment variable -> fallback URLs
+  //   const envUrl = process.env.NEXT_PUBLIC_WEBSOCKET_URL;
+    
+  //   // Log the environment URL for debugging
+  //   console.log(`[${new Date().toISOString()}] Environment WEBSOCKET_URL:`, envUrl);
+    
+  //   // Fallback URLs in case environment variable is not available
+  //   const fallbackUrls = [
+  //     envUrl,
+  //     'https://chatspringboot.bunlong.site/ws', // Production fallback
+  //     'http://localhost:8080/ws' // Development fallback
+  //   ];
+
+  //   // Find the first valid URL
+  //   const url = fallbackUrls.find(u => u && u !== 'undefined' && u.trim() !== '');
+    
+  //   if (!url) {
+  //     console.error(`[${new Date().toISOString()}] ❌ No valid WebSocket URL found in environment or fallbacks`);
+  //     throw new Error('WebSocket URL not configured');
+  //   }
+
+  //   console.log(`[${new Date().toISOString()}] Using WebSocket URL:`, url);
+  //   return url;
+  // }
+
   connect(token: string): Promise<void> {
     if (this.connectionPromise) {
       return this.connectionPromise;
@@ -43,11 +65,22 @@ export class WebSocketService {
     this.connectionPromise = new Promise((resolve, reject) => {
       try {
         console.log(`[${new Date().toISOString()}] Starting WebSocket connection...`);
+        
+        // Get WebSocket URL from environment
+        // const websocketUrl = this.getWebSocketUrl();
+
+        const WEBSOCKET_URL = process.env.NEXT_PUBLIC_WEBSOCKET_URL || 'https://chatspringboot.bunlong.site/ws';
 
         this.stompClient = new Client({
           webSocketFactory: () => {
             // return new SockJS('http://localhost:8080/ws');
-            return new SockJS(`${process.env.NEXT_PUBLIC_WEBSOCKET_URL}`);
+
+            console.log(`[${new Date().toISOString()}] 🔌 Creating SockJS connection to: ${WEBSOCKET_URL}`);
+            return new SockJS(WEBSOCKET_URL);
+
+            // console.log(`[${new Date().toISOString()}] 🔌 Creating SockJS connection to: ${websocketUrl}`);
+            // Create SockJS connection with the environment URL
+            // return new SockJS(websocketUrl);
           },
           
           connectHeaders: {

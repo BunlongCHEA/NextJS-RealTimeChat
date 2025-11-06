@@ -14,7 +14,7 @@ import {
 } from "@/types/chat";
 import { AuthResponse, LoginRequest, RegisterRequest, User } from "@/types/user";
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8080/api';
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'https://chatspringboot.bunlong.site/api';
 
 export class ApiService {
   static removeParticipant(id: number, id1: number) {
