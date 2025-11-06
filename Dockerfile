@@ -51,7 +51,7 @@ COPY nginx.conf /etc/nginx/nginx.conf
 # Copy supervisor configuration
 COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 
-# Create nginx directories and set permissions
+# Create ALL directories and set permissions as ROOT
 RUN mkdir -p /var/cache/nginx/client_temp \
              /var/cache/nginx/proxy_temp \
              /var/cache/nginx/fastcgi_temp \
@@ -59,16 +59,18 @@ RUN mkdir -p /var/cache/nginx/client_temp \
              /var/cache/nginx/scgi_temp \
              /var/log/nginx \
              /var/log/supervisor \
+             /app/logs \
              /run/nginx && \
     chown -R nextjs:nodejs /app && \
     chown -R nextjs:nodejs /var/cache/nginx && \
     chown -R nextjs:nodejs /var/log/nginx && \
     chown -R nextjs:nodejs /var/log/supervisor && \
     chown -R nextjs:nodejs /run/nginx && \
+    chmod -R 755 /var/log/supervisor && \
     touch /var/run/nginx.pid && \
     chown nextjs:nodejs /var/run/nginx.pid
 
-# Switch to non-root user
+# Switch to non-root user AFTER setting permissions
 USER nextjs
 
 # Expose port
