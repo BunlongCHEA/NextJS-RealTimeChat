@@ -54,6 +54,12 @@ npm install @stomp/stompjs sockjs-client
 @stomp/stompjs is the STOMP client library, and sockjs-client is often used as a fallback for WebSocket connections in older browsers or environments that might not natively support WebSockets.
 
 
+```bash
+npm install @vercel/analytics
+```
+@vercel/analytics allows Vercel Web Analytics to automatically track page views and provide insights into your website's performance and traffic within your Vercel Dashboard. Note that analytics data is not tracked in development mode.
+
+
 ## Learn More
 
 To learn more about Next.js, take a look at the following resources:
