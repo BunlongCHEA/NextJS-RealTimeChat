@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef, forwardRef, useImperativeHandle } from 'react';
+import { useState, useEffect, useRef, forwardRef, useImperativeHandle, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/hooks/useAuth';
 import { ApiService } from '@/lib/api';
@@ -96,6 +96,7 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
   const [isOnline, setIsOnline] = useState(true);
   const lastRequestedOnlineStatus = useRef<boolean | null>(null);
   const onlineStatusTimeout = useRef<NodeJS.Timeout | null>(null);
+  const mountedRef = useRef(false);
 
   const [unreadCounts, setUnreadCounts] = useState<Map<number, number>>(new Map());
 
@@ -105,6 +106,7 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
       loadChatRooms(true);
       // Set user online when component mounts
       updateUserOnlineStatus(true);
+      mountedRef.current = true;
     }
 
     // Cleanup function for when component unmounts or user changes
@@ -112,6 +114,7 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
       if (user) {
         updateUserOnlineStatus(false);
       }
+      mountedRef.current = false;
     };
   }, [user, token]);
 
@@ -119,16 +122,16 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
   useEffect(() => {
     if (!user) return;
 
-    // Handle page visibility change
-    const handleVisibilityChange = () => {
-      if (document.hidden) {
-        // Page is hidden (minimized, switched tab, etc.)
-        updateUserOnlineStatus(false);
-      } else {
-        // Page is visible again
-        updateUserOnlineStatus(true);
-      }
-    };
+    // // Handle page visibility change
+    // const handleVisibilityChange = () => {
+    //   if (document.hidden) {
+    //     // Page is hidden (minimized, switched tab, etc.)
+    //     updateUserOnlineStatus(false);
+    //   } else {
+    //     // Page is visible again
+    //     updateUserOnlineStatus(true);
+    //   }
+    // };
 
     // Handle browser/tab close
     const handleBeforeUnload = () => {
@@ -150,13 +153,13 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
       }
     };
 
-    document.addEventListener('visibilitychange', handleVisibilityChange);
+    // document.addEventListener('visibilitychange', handleVisibilityChange);
     window.addEventListener('beforeunload', handleBeforeUnload);
     window.addEventListener('online', handleOnlineStatus);
     window.addEventListener('offline', handleOnlineStatus);
 
     return () => {
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      // document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('beforeunload', handleBeforeUnload);
       window.removeEventListener('online', handleOnlineStatus);
       window.removeEventListener('offline', handleOnlineStatus);
@@ -176,30 +179,87 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
     if (wsConnected && user) {
       const refreshInterval = setInterval(() => {
         // console.log('[ChatSidebar] Periodic refresh of chat rooms');
-        loadChatRooms(false); // Refresh chat rooms
-        refreshUserStatus(); // Refresh user status
+        // loadChatRooms(false); // Refresh chat rooms
+        // refreshUserStatus(false); // Refresh user status
       }, 5000); // Refresh in seconds
       
       return () => clearInterval(refreshInterval);
     }
   }, [wsConnected, user]);
 
-  // Track selected room for read status updates
-  useEffect(() => {
-    if (selectedRoomId && user) {
-      // When a room is selected, we could mark messages as read
-      // This would typically be handled by the ChatWindow component
-      // but we can also track room selection here
-      handleRoomSelection(selectedRoomId);
+  // // Track selected room for read status updates
+  // useEffect(() => {
+  //   if (selectedRoomId && user) {
+  //     // Clear unread count for selected room
+  //     // setUnreadCounts(prev => {
+  //     //   const newCounts = new Map(prev);
+  //     //   newCounts.delete(selectedRoomId);
+  //     //   return newCounts;
+  //     // });
 
-      // Clear unread count for selected room
-      setUnreadCounts(prev => {
-        const newCounts = new Map(prev);
-        newCounts.delete(selectedRoomId);
-        return newCounts;
-      });
-    }
-  }, [selectedRoomId, user]);
+  //     setUnreadCounts(prev => {
+  //       const newCounts = new Map(prev);
+  //       const hadUnread = newCounts.has(selectedRoomId);
+  //       if (hadUnread) {
+  //         console.log(`[ChatSidebar] 🔔 Clearing unread badge for room ${selectedRoomId}`);
+  //       }
+  //       newCounts.delete(selectedRoomId);
+  //       return newCounts;
+  //     });
+
+  //     // When a room is selected, we could mark messages as read
+  //     // This would typically be handled by the ChatWindow component
+  //     // but we can also track room selection here
+  //     // handleRoomSelection(selectedRoomId);
+  //     handleRoomClick(selectedRoomId);
+  //   }
+  // }, [selectedRoomId, user]);
+
+
+
+  // Add this new effect after the user status subscription effect
+  // useEffect(() => {
+  //   if (!wsConnected || !chatRooms.length || !user) return;
+
+  //   console.log(`[ChatSidebar] Setting up message status subscriptions for ${chatRooms.length} rooms`);
+
+  //   // Subscribe to message status updates for each room
+  //   chatRooms.forEach(room => {
+  //     wsService.current.subscribeToUserOrMessageStatus(
+  //       room.id,
+  //       (update: UserStatusUpdate | MessageStatusUpdate) => {
+  //         // Only handle message status updates
+  //         if ('type' in update && update.type === 'MESSAGE_STATUS_UPDATE') {
+  //           const msgUpdate = update as MessageStatusUpdate;
+            
+  //           // If current user marked a message as READ, clear unread count
+  //           if (msgUpdate.status === EnumStatus.READ && msgUpdate.userId === user.id) {
+  //             console.log(`[ChatSidebar] 🔔 User ${user.username} marked message ${msgUpdate.messageId} as READ in room ${room.id}`);
+              
+  //             setUnreadCounts(prev => {
+  //               const newCounts = new Map(prev);
+  //               const hadUnread = newCounts.has(room.id);
+                
+  //               if (hadUnread) {
+  //                 console.log(`[ChatSidebar] ✅ Clearing unread badge for room ${room.id}`);
+  //                 newCounts.delete(room.id);
+  //               }
+                
+  //               return newCounts;
+  //             });
+  //           }
+  //         }
+  //       }
+  //     );
+  //   });
+
+  //   return () => {
+  //     console.log(`[ChatSidebar] Cleaning up message status subscriptions`);
+  //     // Cleanup is handled by WebSocketService
+  //   };
+  // }, [wsConnected, chatRooms, user]);
+
+
 
   // Debouncing effect for search query
   useEffect(() => {
@@ -251,6 +311,83 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
     }
   }, [chatRooms, user]);
 
+  // Update User Status
+  useEffect(() => {
+    // Only proceed if WebSocket is connected and we have chat rooms
+    if (!wsConnected || !chatRooms.length || !user) return;
+
+    console.log(`[ChatSidebar] Setting up user status subscriptions for ${chatRooms.length} rooms`);
+
+    // Collect all unique user IDs from all chat rooms (excluding current user)
+    const allUserIds = new Set<number>();
+    chatRooms.forEach(room => {
+      room.participants?.forEach(participant => {
+        // Don't subscribe to current user's own status
+        if (participant.userId !== user.id) {
+          allUserIds.add(participant.userId);
+        }
+      });
+    });
+
+    console.log(`[ChatSidebar] Subscribing to ${allUserIds.size} users' status updates`);
+
+    // Subscribe to each user's status
+    allUserIds.forEach(userId => {
+      wsService.current.subscribeToUserStatus(userId, (update: UserStatusUpdate) => {
+        console.log(`[ChatSidebar] 👤 User status update received for user ${userId}:`, update);
+        
+        // Update chat rooms list with new status
+        setChatRooms(prev => {
+          let hasChanges = false;
+          
+          const updated = prev.map(room => {
+            if (!room.participants) return room;
+            
+            const updatedParticipants = room.participants.map(participant => {
+              if (participant.userId === update.userId) {
+                // Only update if status actually changed
+                if (participant.online !== update.online || participant.lastSeen !== update.lastSeen) {
+                  hasChanges = true;
+                  console.log(`  ✅ Updated ${participant.username} in room "${room.name}": ${update.online ? 'ONLINE 🟢' : 'OFFLINE ⚫'}`);
+                  return { 
+                    ...participant, 
+                    online: update.online, 
+                    lastSeen: update.lastSeen 
+                  };
+                }
+              }
+              return participant;
+            });
+            
+            // Only create new room object if participants changed
+            if (hasChanges) {
+              return { ...room, participants: updatedParticipants };
+            }
+            return room;
+          });
+          
+          // Only update state if something actually changed
+          if (hasChanges) {
+            console.log(`  🔄 ChatRooms state updated`);
+            return updated;
+          }
+          
+          return prev;
+        });
+        
+      });
+    });
+
+    // Cleanup function
+    return () => {
+      console.log(`[ChatSidebar] Cleaning up ${allUserIds.size} user status subscriptions`);
+      allUserIds.forEach(userId => {
+        wsService.current.unsubscribeFromUserStatus(userId);
+      });
+    };
+  }, [wsConnected, chatRooms, user]); 
+
+
   // Handle Message Statuses
 
   // Load unread message counts
@@ -261,6 +398,12 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
       const counts = new Map<number, number>();
       
       for (const room of chatRooms) {
+        // Skip the currently selected room - no need to show unread badge
+        if (selectedRoomId && room.id === selectedRoomId) {
+          console.log(`[ChatSidebar] ⏭️ Skipping unread count for selected room ${room.id}`);
+          continue;
+        }
+        
         if (room.lastMessageId && room.lastMessageId > 0) {
           try {
             // Only check unread status if the current user is NOT the sender of the last message
@@ -321,21 +464,32 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
       });
       
       // Refresh chat rooms to update unread counts
-      loadChatRooms(false);
+      // loadChatRooms(false);
     } catch (error) {
       console.error('Failed to update last read message:', error);
     }
   };
 
-  // Handle room selection and potentially mark as read
-  const handleRoomSelection = (roomId: number) => {
-    // Find the selected room
-    const room = chatRooms.find(r => r.id === roomId);
-    if (room && room.lastMessageId) {
-      // Update last read message to the latest message in the room
-      updateLastReadMessage(roomId, room.lastMessageId);
-    }
-  };
+  // // Handle room selection and potentially mark as read
+  // const handleRoomSelection = (roomId: number) => {
+  //   console.log(`[ChatSidebar] selected Room ${roomId}`);
+
+  //   handleRoomClick(roomId);
+  
+  //   // // Immediately clear unread count for UI responsiveness
+  //   // setUnreadCounts(prev => {
+  //   //   const newCounts = new Map(prev);
+  //   //   newCounts.delete(roomId);
+  //   //   return newCounts;
+  //   // });
+
+  //   // // Find the selected room
+  //   // const room = chatRooms.find(r => r.id === roomId);
+  //   // if (room && room.lastMessageId && room.lastMessageId > 0) {
+  //   //   // Update last read message to the latest message in the room
+  //   //   updateLastReadMessage(roomId, room.lastMessageId);
+  //   // }
+  // };
 
 
   // Handle User Status Updates
@@ -371,15 +525,21 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
   };
 
   // Add this function inside ChatSidebar component
-  const refreshUserStatus = async () => {
+  const refreshUserStatus = async (showLoading = true) => {
     if (!user) return;
     
     try {
+      if (showLoading) setLoading(false);
+      setError(null);
+      
       // Silently refresh chat rooms to get updated participant status
       const rooms = await ApiService.getChatRoomsByUserId(user.id);
       setChatRooms(rooms);
+
     } catch (error) {
       console.error('Failed to refresh user status:', error);
+    } finally {
+      if (showLoading) setLoading(false);
     }
   };
 
@@ -407,27 +567,6 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
       setError('Failed to connect to real-time updates');
     }
   };
-
-  // const connectWebSocket = async () => {
-  //   if (!user || !token) return;
-
-  //   try {
-  //     if (wsService.current.isWebSocketConnected()) {
-  //       setWsConnected(true);
-  //       setupWebSocketHandlers();
-  //       return;
-  //     }
-
-  //     await wsService.current.connect(token);
-  //     setWsConnected(true);
-  //     setError(null);
-  //     setupWebSocketHandlers();
-  //   } catch (error) {
-  //     console.error('WebSocket connection failed:', error);
-  //     setWsConnected(false);
-  //     setError('Failed to connect to real-time updates');
-  //   }
-  // };
 
   // setupWebSocketHandlers : Setup GLOBAL WebSocket handlers that work across all rooms
   const setupGlobalWebSocketHandlers = () => {
@@ -490,11 +629,11 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
       if ('type' in update && update.type === 'MESSAGE_STATUS_UPDATE') {
         // Handle message status updates globally
         handleGlobalMessageUpdate(update);
-        
-      } else if ('username' in update) {
+      } 
+      else if ('username' in update) {
         // Handle user status updates globally
         handleGlobalUserStatusUpdate(update as UserStatusUpdate);
-        loadChatRooms(false);
+        // loadChatRooms(false);
       }
     });
 
@@ -524,18 +663,29 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
   const handleGlobalMessageUpdate = (update: MessageStatusUpdate) => {
     // If a message status was updated to READ, refresh unread counts
     if (update.status === EnumStatus.READ) {
+      // Find which room this message belongs to
+      const messageRoom = chatRooms.find(room => room.lastMessageId === update.messageId);
+      
+      if (messageRoom) {
+        setUnreadCounts(prev => {
+          const newCounts = new Map(prev);
+          newCounts.delete(messageRoom.id);
+          return newCounts;
+        });
+      }
+      
       loadUnreadCounts();
     }
 
     // This will trigger a refresh of chat rooms to update last message timestamps
-    loadChatRooms(false);
+    // loadChatRooms(false);
     // if (onRefreshNeeded) {
     //   onRefreshNeeded();
     // }
   };
 
   // Handle global user status updates
-  const handleGlobalUserStatusUpdate = (update: UserStatusUpdate) => {
+  const handleGlobalUserStatusUpdate = useCallback((update: UserStatusUpdate) => {
     setChatRooms(prev => prev.map(room => {
       if (room.participants) {
         const updatedParticipants = room.participants.map(participant => {
@@ -552,11 +702,9 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
       }
       return room;
     }));
-  };
+  }, []);
 
-
-  // Handle WebSocket subscriptions and updates
-
+  // Handle New Chat Room broadcast
   const subscribeToNewChatRoom = (update: ChatRoomBroadcast) => {
     const newRoom = update.chatRoom;
     
@@ -576,6 +724,7 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
     setTimeout(() => setError(null), 3000);
   };
 
+  // Handle Add Participant to Chat Room broadcast
   const handleAddedToChatRoom = async (update: AddedToChatRoomBroadcast) => {
     try {
       const newRoom = await ApiService.getChatRoomById(update.chatRoomId);
@@ -604,13 +753,6 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
       return room;
     }));
   };
-
-  // const subscribeToUserOrMessageStatus = (update: MessageStatusUpdate) => {
-  //   if (update.type === 'MESSAGE_STATUS_UPDATE' && update.status === EnumStatus.DELIVERED) {
-  //     // Handle message delivery status
-  //     console.log('Message delivered:', update);
-  //   }
-  // };
 
   // Helper functions
 
@@ -816,6 +958,8 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
     onRoomSelect(roomId);
     router.push(`/chat/${roomId}`);
 
+    console.log(`[ChatSidebar] selected Room handleRoomClick ${roomId}`);
+
     // Update last read message when room is clicked
     const room = chatRooms.find(r => r.id === roomId);
     if (room && room.lastMessageId) {
@@ -844,7 +988,7 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
       await new Promise(resolve => setTimeout(resolve, 100));
 
       // Refresh chat rooms to show the new group
-      await loadChatRooms(true);
+      await loadChatRooms(false);
 
       // Notify parent about the new room
       // if (onRoomCreated) {
@@ -864,7 +1008,7 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
       await new Promise(resolve => setTimeout(resolve, 100));
 
       // Refresh chat rooms to show the new channel
-      await loadChatRooms(true);
+      await loadChatRooms(false);
       
       // Notify parent about the new room
       // if (onRoomCreated) {
@@ -897,20 +1041,20 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
     }
   };
 
-  // Update UI:
+  // // Update UI:
  
-  // The WebSocket status indicator to show both WS and online status
-  const getConnectionStatusColor = () => {
-    if (!isOnline) return 'bg-red-500'; // Offline
-    if (!wsConnected) return 'bg-yellow-500'; // Online but WS disconnected
-    return 'bg-green-500'; // Online and connected
-  };
+  // // The WebSocket status indicator to show both WS and online status
+  // const getConnectionStatusColor = () => {
+  //   if (!isOnline) return 'bg-red-500'; // Offline
+  //   if (!wsConnected) return 'bg-yellow-500'; // Online but WS disconnected
+  //   return 'bg-green-500'; // Online and connected
+  // };
 
-  const getConnectionStatusText = () => {
-    if (!isOnline) return 'Offline';
-    if (!wsConnected) return 'Connecting';
-    return 'Live';
-  };
+  // const getConnectionStatusText = () => {
+  //   if (!isOnline) return 'Offline';
+  //   if (!wsConnected) return 'Connecting';
+  //   return 'Live';
+  // };
 
   if (error && error.includes('Failed to load chat rooms')) {
     return (
@@ -920,7 +1064,7 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
           <button 
             onClick={() => {
               setError(null);
-              loadChatRooms(true);
+              loadChatRooms(false);
             }}
             className="px-4 py-2 bg-blue-500 text-white rounded-lg text-sm hover:bg-blue-600"
           >
@@ -932,16 +1076,16 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
   }
 
   const displayItems = showSearch && debouncedSearchQuery.trim() ? searchResults : 
-      filteredRooms.map(room => ({
-        type: 'chat' as const,
-        data: room,
-        id: room.id,
-        name: getChatRoomDisplayName(room, user!),
-        avatar: getChatRoomAvatar(room, user!),
-        subtitle: room.lastMessageContent 
-          ? truncateMessage(getMessagePreview(room.lastMessageContent, room.lastMessageType!, room.lastMessageAttachmentCount), 35)
-          : 'No messages yet'
-      }));
+    filteredRooms.map(room => ({
+      type: 'chat' as const,
+      data: room,
+      id: room.id,
+      name: getChatRoomDisplayName(room, user!),
+      avatar: getChatRoomAvatar(room, user!),
+      subtitle: room.lastMessageContent 
+        ? truncateMessage(getMessagePreview(room.lastMessageContent, room.lastMessageType!, room.lastMessageAttachmentCount), 35)
+        : 'No messages yet'
+    }));
 
   return (
     <div className="w-80 bg-gray-50 border-r border-gray-200 flex flex-col h-full">

@@ -227,6 +227,7 @@ export interface UserStatusUpdate {
   username: string;
   online: boolean;
   lastSeen: string;
+  type?: 'USER_STATUS_UPDATE';
 }
 
 export interface MessageStatusUpdate {

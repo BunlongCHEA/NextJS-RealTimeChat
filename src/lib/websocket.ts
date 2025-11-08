@@ -17,6 +17,8 @@ export class WebSocketService {
   private maxReconnectAttempts = 5;
   private reconnectDelay = 3000;
   private connectionPromise: Promise<void> | null = null;
+  // private userStatusSubscriptions: Map<number, StompJs.StompSubscription> = new Map();
+  private userStatusSubscriptions: Map<number, StompSubscription> = new Map();
 
   static getInstance(): WebSocketService {
     if (!WebSocketService.instance) {
@@ -172,13 +174,14 @@ export class WebSocketService {
   }
 
 
-  // NEW: Subscribe to global message notifications (for sidebar updates)
+  // Subscribe to global message notifications (for sidebar updates)
   subscribeToGlobalMessageNotifications(onUpdate: (notification: ChatMessageDTO) => void): void {
     if (!this.isConnected || !this.stompClient) {
       return;
     }
 
-    const topic = '/user/queue/message-notifications';
+    // const topic = '/user/queue/message-notifications';
+    const topic = '/topic/message-notifications';
     
     if (this.subscriptions.has(topic)) {
       this.subscriptions.get(topic)?.unsubscribe();
@@ -189,6 +192,7 @@ export class WebSocketService {
         try {
           const notification = JSON.parse(message.body);
           onUpdate(notification);
+          console.log('Received global message notification:', notification);
         } catch (error) {
           console.error('Error parsing global message notification:', error);
         }
@@ -200,7 +204,6 @@ export class WebSocketService {
     }
   }
 
-
   // Subscribe to chat updates for create a new chat room.
   subscribeToNewChatRoom(onUpdate: (update: ChatRoomBroadcast | AddedToChatRoomBroadcast) => void): void {
     if (!this.isConnected || !this.stompClient) {
@@ -208,7 +211,8 @@ export class WebSocketService {
       return;
     }
 
-    const topic = '/user/queue/chat-updates';
+    // const topic = '/user/queue/chat-updates';
+    const topic = '/topic/chat-updates';
     
     if (this.subscriptions.has(topic)) {
       this.subscriptions.get(topic)?.unsubscribe();
@@ -308,6 +312,87 @@ export class WebSocketService {
       console.log(`[${new Date().toISOString()}] ✅ Subscribed to room ${chatRoomId} status at ${topic}`);
     } catch (error) {
       console.error(`[${new Date().toISOString()}] ❌ Failed to subscribe to room status:`, error);
+    }
+  }
+
+  // Subscribe to a specific user's status updates. This allows tracking users across different rooms
+  subscribeToUserStatus(userId: number, onStatusUpdate: (update: UserStatusUpdate) => void): void {
+    if (!this.isConnected || !this.stompClient) {
+      console.error(`[${new Date().toISOString()}] ❌ WebSocket not connected - cannot subscribe to user ${userId} status`);
+      return;
+    }
+
+    const topic = `/topic/user/${userId}/status`;
+    
+    // Clean up existing subscription if any
+    if (this.userStatusSubscriptions.has(userId)) {
+      this.userStatusSubscriptions.get(userId)?.unsubscribe();
+    }
+
+    try {
+      const subscription = this.stompClient.subscribe(topic, (message: IMessage) => {
+        try {
+          const statusData = JSON.parse(message.body);
+          console.log(`[${new Date().toISOString()}] 👤 User ${userId} status update:`, statusData);
+          
+          const userUpdate: UserStatusUpdate = {
+            userId: statusData.userId,
+            username: statusData.username,
+            online: statusData.online,
+            lastSeen: statusData.lastSeen
+          };
+          
+          onStatusUpdate(userUpdate);
+        } catch (error) {
+          console.error(`[${new Date().toISOString()}] ❌ Error parsing user status update:`, error);
+        }
+      });
+
+      this.userStatusSubscriptions.set(userId, subscription);
+      console.log(`[${new Date().toISOString()}] ✅ Subscribed to user ${userId} status at ${topic}`);
+    } catch (error) {
+      console.error(`[${new Date().toISOString()}] ❌ Failed to subscribe to user status:`, error);
+    }
+  }
+
+  // // Subscribe to global user status updates : online/offline status across all rooms
+  // subscribeToGlobalUserStatus(userId: number, onStatusUpdate: (update: UserStatusUpdate) => void): void {
+  //   if (!this.isConnected || !this.stompClient) {
+  //     console.error(`[${new Date().toISOString()}] ❌ WebSocket not connected`);
+  //     return;
+  //   }
+
+  //   const topic = `/user/topic/status`;
+    
+  //   if (this.subscriptions.has(topic)) {
+  //     this.subscriptions.get(topic)?.unsubscribe();
+  //   }
+
+  //   try {
+  //     const subscription = this.stompClient.subscribe(topic, (message: IMessage) => {
+  //       try {
+  //         const statusData = JSON.parse(message.body);
+  //         console.log(`[${new Date().toISOString()}] 📊 Received global user status:`, statusData);
+  //         onStatusUpdate(statusData);
+  //       } catch (error) {
+  //         console.error(`[${new Date().toISOString()}] ❌ Error parsing status:`, error);
+  //       }
+  //     });
+
+  //     this.subscriptions.set(topic, subscription);
+  //     console.log(`[${new Date().toISOString()}] ✅ Subscribed to global user status`);
+  //   } catch (error) {
+  //     console.error(`[${new Date().toISOString()}] ❌ Failed to subscribe:`, error);
+  //   }
+  // }
+
+  // Unsubscribe from specific user status
+  unsubscribeFromUserStatus(userId: number): void {
+    const subscription = this.userStatusSubscriptions.get(userId);
+    if (subscription) {
+      subscription.unsubscribe();
+      this.userStatusSubscriptions.delete(userId);
+      console.log(`[${new Date().toISOString()}] 🔕 Unsubscribed from user ${userId} status`);
     }
   }
 

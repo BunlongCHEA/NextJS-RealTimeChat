@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useAuth } from '@/hooks/useAuth';
 import { ApiService } from '@/lib/api';
 import { 
@@ -62,6 +62,8 @@ export default function ChatWindow({ roomId, onBack, onRoomCreated, onMessageSen
   const [visibleMessages, setVisibleMessages] = useState<Set<number>>(new Set());
   const intersectionObserver = useRef<IntersectionObserver | null>(null);
 
+  const subscribedUserIds = useRef<Set<number>>(new Set());
+
   useEffect(() => {
     if (roomId && user && token) {
       loadChatRoom();
@@ -103,7 +105,7 @@ export default function ChatWindow({ roomId, onBack, onRoomCreated, onMessageSen
   useEffect(() => {
     if (chatRoom && user) {
       const statusRefreshInterval = setInterval(() => {
-        refreshUserStatus();
+        // refreshUserStatus();
       }, 5000); // Refresh in seconds
       
       return () => clearInterval(statusRefreshInterval);
@@ -126,7 +128,7 @@ export default function ChatWindow({ roomId, onBack, onRoomCreated, onMessageSen
             // Auto-mark as read when message becomes visible (with small delay)
             setTimeout(() => {
               markMessageAsRead(messageId);
-            }, 1000); // 1 second delay to ensure user actually sees the message
+            }, 500); // 0.5 second delay to ensure user actually sees the message
 
           } else if (!entry.isIntersecting && messageId > 0) {
             setVisibleMessages(prev => {
@@ -205,6 +207,66 @@ export default function ChatWindow({ roomId, onBack, onRoomCreated, onMessageSen
     }
   }, [messages, user]);
 
+
+
+  // Subscribe to room-level status updates
+  useEffect(() => {
+    if (!chatRoom || !wsService.current) return;
+
+    wsService.current.subscribeToUserOrMessageStatus(
+      roomId,
+      (update: UserStatusUpdate | MessageStatusUpdate) => {
+        if ('type' in update && update.type === 'MESSAGE_STATUS_UPDATE') {
+          handleMessageStatusUpdate(update);
+        } else if ('username' in update) {
+          handleUserStatusUpdate(update as UserStatusUpdate);
+        }
+      }
+    );
+
+    return () => {
+      // Cleanup handled by WebSocketService
+    };
+  }, [chatRoom, roomId]);
+
+  // Subscribe to individual user status updates for all participants
+  useEffect(() => {
+    if (!chatRoom?.participants || !wsService.current) return;
+
+    const newUserIds = new Set<number>();
+
+    // Subscribe to each participant's status
+    chatRoom.participants.forEach(participant => {
+      if (!subscribedUserIds.current.has(participant.userId)) {
+        wsService.current?.subscribeToUserStatus(
+          participant.userId,
+          handleUserStatusUpdate
+        );
+        subscribedUserIds.current.add(participant.userId);
+      }
+      newUserIds.add(participant.userId);
+    });
+
+    // Unsubscribe from users no longer in participants
+    subscribedUserIds.current.forEach(userId => {
+      if (!newUserIds.has(userId)) {
+        wsService.current?.unsubscribeFromUserStatus(userId);
+        subscribedUserIds.current.delete(userId);
+      }
+    });
+
+    return () => {
+      // Cleanup: unsubscribe from all user status subscriptions
+      subscribedUserIds.current.forEach(userId => {
+        wsService.current?.unsubscribeFromUserStatus(userId);
+      });
+      subscribedUserIds.current.clear();
+    };
+  }, [chatRoom?.participants]);
+
+
+
+
   // Message Status Handling
 
   // Mark messages as read when they become visible
@@ -214,25 +276,13 @@ export default function ChatWindow({ roomId, onBack, onRoomCreated, onMessageSen
       return;
     }
 
-    const message = messages.find(m => m.id === messageId);
-    console.log(`[ChatWindow] markMessageAsRead called for messageId: ${messageId}`, message);
-    // if (!message || message.senderId === user.id) {
-    //   console.log(`[ChatWindow] Skipping read status - message not found or user is sender`);
-    //   return; // Don't mark own messages as read
-    // }
-
-    // Don't mark own messages as read
-    // if (!message || message.senderId === user.id) {
-    //   console.log(`[ChatWindow] Skipping read status - message not found or user is sender`);
-    //   return;
-    // }
-
     try {
       // console.log(`[ChatWindow] Marking message ${messageId} as read for user ${user.id}`);
       
       // Check if status already exists and is not READ
       try {
         const existingStatus = await ApiService.getMessageStatusByUserAndMessage(user.id, messageId, true);
+
         if (existingStatus.status === EnumStatus.READ) {
           console.log(`[ChatWindow] Message ${messageId} already marked as read`);
           return;
@@ -246,6 +296,7 @@ export default function ChatWindow({ roomId, onBack, onRoomCreated, onMessageSen
         // Status doesn't exist, create it as read
         console.log(`[ChatWindow] Creating read status for message ${messageId}`);
         // await ApiService.createMessageStatus(user.id, messageId, EnumStatus.READ);
+        // await ApiService.updateMessageStatus(user.id, messageId, EnumStatus.READ);
       }
       
       // Update local state
@@ -276,6 +327,8 @@ export default function ChatWindow({ roomId, onBack, onRoomCreated, onMessageSen
       // Reload chat room to get fresh participant data
       const updatedRoom = await ApiService.getChatRoomById(roomId);
       setChatRoom(updatedRoom);
+
+      console.log('✅ User status refreshed');
     } catch (error) {
       console.error('Failed to refresh user status:', error);
     }
@@ -358,8 +411,10 @@ export default function ChatWindow({ roomId, onBack, onRoomCreated, onMessageSen
     }
   };
 
-  const handleUserStatusUpdate = (update: UserStatusUpdate) => {
-    if (chatRoom && chatRoom.participants) {
+  const handleUserStatusUpdate = useCallback((update: UserStatusUpdate) => {
+    console.log('👤 User status update received:', update);
+
+    // if (chatRoom && chatRoom.participants) {
       setChatRoom(prev => {
         if (!prev) return prev;
         
@@ -374,15 +429,25 @@ export default function ChatWindow({ roomId, onBack, onRoomCreated, onMessageSen
           return participant;
         });
 
+        // Only update if something actually changed
+        const hasChanges = prev.participants?.some(
+          p => p.userId === update.userId && 
+          (p.online !== update.online || p.lastSeen !== update.lastSeen)
+        );
+
+        if (!hasChanges) return prev;
+
         return {
           ...prev,
           participants: updatedParticipants
         };
       });
-    }
-  };
+    // }
+  }, []);
 
-  const handleMessageStatusUpdate = (update: MessageStatusUpdate) => {
+  const handleMessageStatusUpdate = useCallback((update: MessageStatusUpdate) => {
+    console.log('📨 Message status update received:', update);
+
     setMessageStatuses(prev => {
       const newStatuses = new Map(prev);
       
@@ -395,7 +460,7 @@ export default function ChatWindow({ roomId, onBack, onRoomCreated, onMessageSen
       
       return newStatuses;
     });
-  };
+  }, []);
 
   const loadChatRoom = async () => {
     try {
