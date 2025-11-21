@@ -16,7 +16,8 @@ import {
   MessageStatusUpdate,
   EnumStatus,
   UserStatusUpdate,
-  ChatMessageDTO
+  ChatMessageDTO,
+  EnumMessageType
 } from '@/types/chat';
 import { User } from '@/types/user';
 import { 
@@ -61,9 +62,9 @@ interface SearchResult {
   subtitle?: string;
 }
 
-export interface ChatSidebarRef {
-  refreshChatRooms: () => void;
-}
+// export interface ChatSidebarRef {
+//   refreshChatRooms: () => void;
+// }
 
 export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSidebarProps) {
 // const ChatSidebar = forwardRef<ChatSidebarRef, ChatSidebarProps>(
@@ -201,7 +202,7 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
   //       const newCounts = new Map(prev);
   //       const hadUnread = newCounts.has(selectedRoomId);
   //       if (hadUnread) {
-  //         console.log(`[ChatSidebar] 🔔 Clearing unread badge for room ${selectedRoomId}`);
+  //         console.log(`[ChatSidebar] Clearing unread badge for room ${selectedRoomId}`);
   //       }
   //       newCounts.delete(selectedRoomId);
   //       return newCounts;
@@ -234,14 +235,14 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
             
   //           // If current user marked a message as READ, clear unread count
   //           if (msgUpdate.status === EnumStatus.READ && msgUpdate.userId === user.id) {
-  //             console.log(`[ChatSidebar] 🔔 User ${user.username} marked message ${msgUpdate.messageId} as READ in room ${room.id}`);
+  //             console.log(`[ChatSidebar] User ${user.username} marked message ${msgUpdate.messageId} as READ in room ${room.id}`);
               
   //             setUnreadCounts(prev => {
   //               const newCounts = new Map(prev);
   //               const hadUnread = newCounts.has(room.id);
                 
   //               if (hadUnread) {
-  //                 console.log(`[ChatSidebar] ✅ Clearing unread badge for room ${room.id}`);
+  //                 console.log(`[ChatSidebar] Clearing unread badge for room ${room.id}`);
   //                 newCounts.delete(room.id);
   //               }
                 
@@ -311,7 +312,7 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
     }
   }, [chatRooms, user]);
 
-  // Update User Status
+  // Update User Status and Message Monitoring
   useEffect(() => {
     // Only proceed if WebSocket is connected and we have chat rooms
     if (!wsConnected || !chatRooms.length || !user) return;
@@ -348,7 +349,7 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
                 // Only update if status actually changed
                 if (participant.online !== update.online || participant.lastSeen !== update.lastSeen) {
                   hasChanges = true;
-                  console.log(`  ✅ Updated ${participant.username} in room "${room.name}": ${update.online ? 'ONLINE 🟢' : 'OFFLINE ⚫'}`);
+                  console.log(`Updated ${participant.username} in room "${room.name}": ${update.online ? 'ONLINE' : 'OFFLINE'}`);
                   return { 
                     ...participant, 
                     online: update.online, 
@@ -377,7 +378,7 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
         
       });
     });
-
+    
     // Cleanup function
     return () => {
       console.log(`[ChatSidebar] Cleaning up ${allUserIds.size} user status subscriptions`);
@@ -385,7 +386,7 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
         wsService.current.unsubscribeFromUserStatus(userId);
       });
     };
-  }, [wsConnected, chatRooms, user]); 
+  }, [wsConnected, chatRooms, user, selectedRoomId]); 
 
 
   // Handle Message Statuses
@@ -591,22 +592,9 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
 
     // Subscribe to ALL message updates globally (for sidebar refresh)
     wsService.current.subscribeToGlobalMessageNotifications?.((notification: ChatMessageDTO) => {
-      console.log('[ChatSidebar] Received global message notification:', notification);
+      // console.log('[ChatSidebar] Received global message notification:', notification);
       handleGlobalMessageNotification(notification);
       loadChatRooms(false); // Refresh to update last message
-      // if (onRefreshNeeded) {
-      //   onRefreshNeeded();
-      // }
-
-      // // Update unread count for the room (if not currently selected)
-      // if (selectedRoomId !== notification.chatRoomId) {
-      //   setUnreadCounts(prev => {
-      //     const newCounts = new Map(prev);
-      //     const currentCount = newCounts.get(notification.chatRoomId) || 0;
-      //     newCounts.set(notification.chatRoomId, currentCount + 1);
-      //     return newCounts;
-      //   });
-      // }
 
       // Only update unread count if current user is NOT the sender and not in the selected room
       if (user && notification.senderId !== user.id && selectedRoomId !== notification.chatRoomId) {
@@ -622,6 +610,7 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
     // Subscribe to ALL participant additions across rooms
     wsService.current.subscribeToErrors((errorMessage: string) => {
       setError(errorMessage);
+      console.error('[ChatSidebar] WebSocket error:', errorMessage);
     });
 
     // Subscribe to global user status updates
@@ -639,17 +628,17 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
 
     // Subscribe to participant additions (when users are added to groups)
     // This will be called after a new chat room is created and participants are added
-    wsService.current.subscribeParticipantsAdded = (chatRoomId: number, onUpdate: (update: ParticipantAddedBroadcast) => void) => {
-      wsService.current.subscribeParticipantsAdded(chatRoomId, (update: ParticipantAddedBroadcast) => {
-        if (update.type === 'PARTICIPANT_ADDED') {
-          subscribeParticipantsAdded(update);
-          loadChatRooms(false);
-          // if (onRefreshNeeded) {
-          //   onRefreshNeeded();
-          // }
-        }
-      });
-    };
+    // wsService.current.subscribeParticipantsAdded = (chatRoomId: number, onUpdate: (update: ParticipantAddedBroadcast) => void) => {
+    //   wsService.current.subscribeParticipantsAdded(chatRoomId, (update: ParticipantAddedBroadcast) => {
+    //     if (update.type === 'PARTICIPANT_ADDED') {
+    //       subscribeParticipantsAdded(update);
+    //       loadChatRooms(false);
+    //       // if (onRefreshNeeded) {
+    //       //   onRefreshNeeded();
+    //       // }
+    //     }
+    //   });
+    // };
   };
 
   const handleGlobalMessageNotification = (message: ChatMessageDTO) => {
@@ -720,7 +709,7 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
     //   onRoomCreated(newRoom.id);
     // }
 
-    setError(`✅ New chat room "${newRoom.name}" created`);
+    setError(`New chat room "${newRoom.name}" created`);
     setTimeout(() => setError(null), 3000);
   };
 
@@ -735,7 +724,7 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
         return [newRoom, ...prev];
       });
 
-      setError(`✅ You were added to "${newRoom.name}" by ${update.addedBy}`);
+      setError(`You were added to "${newRoom.name}" by ${update.addedBy}`);
       setTimeout(() => setError(null), 5000);
       
     } catch (error) {
@@ -959,6 +948,14 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
     router.push(`/chat/${roomId}`);
 
     console.log(`[ChatSidebar] selected Room handleRoomClick ${roomId}`);
+
+    // Subscribe to participant additions for this room
+    wsService.current.subscribeParticipantsAdded(roomId, (update: ParticipantAddedBroadcast) => {
+      if (update.type === 'PARTICIPANT_ADDED') {
+        subscribeParticipantsAdded(update);
+        loadChatRooms(false);
+      }
+    });
 
     // Update last read message when room is clicked
     const room = chatRooms.find(r => r.id === roomId);

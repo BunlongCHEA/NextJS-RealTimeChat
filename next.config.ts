@@ -67,15 +67,33 @@ const nextConfig: NextConfig = {
     remotePatterns: [
       {
         protocol: 'https',
-        hostname: 'raw.githubusercontent.com',
+        hostname: 'example.com',
         port: '',
         pathname: '/**',
       },
       {
         protocol: 'https',
-        hostname: 'example.com',
+        hostname: 'ui-avatars.com',
         port: '',
-        pathname: '/**',
+        pathname: '/api/**',
+      },
+      {
+        protocol: 'http',
+        hostname: 'localhost',
+        port: '',
+        pathname: '/api/v1/images/**',
+      },
+      // {
+      //   protocol: 'https',
+      //   hostname: 'chatnextjs.bunlong.site',
+      //   port: '',
+      //   pathname: '/api/v1/images/**',
+      // },
+      {
+        protocol: 'https',
+        hostname: 'chatspringboot.bunlong.site',
+        port: '',
+        pathname: '/api/v1/images/**',
       },
       {
         protocol: 'https',

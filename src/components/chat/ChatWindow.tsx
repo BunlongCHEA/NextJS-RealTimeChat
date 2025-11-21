@@ -266,7 +266,6 @@ export default function ChatWindow({ roomId, onBack, onRoomCreated, onMessageSen
 
 
 
-
   // Message Status Handling
 
   // Mark messages as read when they become visible
@@ -310,29 +309,29 @@ export default function ChatWindow({ roomId, onBack, onRoomCreated, onMessageSen
         return newStatuses;
       });
 
-      if (onMessageSent) {
-        onMessageSent();
-      }
+      // if (onMessageSent) {
+      //   onMessageSent();
+      // }
 
     } catch (error) {
       console.error('Failed to mark message as read:', error);
     }
   };
 
-  // Add this function inside ChatWindow component
-  const refreshUserStatus = async () => {
-    if (!chatRoom || !user) return;
+  // // Add this function inside ChatWindow component
+  // const refreshUserStatus = async () => {
+  //   if (!chatRoom || !user) return;
     
-    try {
-      // Reload chat room to get fresh participant data
-      const updatedRoom = await ApiService.getChatRoomById(roomId);
-      setChatRoom(updatedRoom);
+  //   try {
+  //     // Reload chat room to get fresh participant data
+  //     const updatedRoom = await ApiService.getChatRoomById(roomId);
+  //     setChatRoom(updatedRoom);
 
-      console.log('✅ User status refreshed');
-    } catch (error) {
-      console.error('Failed to refresh user status:', error);
-    }
-  };
+  //     console.log('✅ User status refreshed');
+  //   } catch (error) {
+  //     console.error('Failed to refresh user status:', error);
+  //   }
+  // };
 
   // WebSocket connection and subscriptions
 
@@ -377,9 +376,9 @@ export default function ChatWindow({ roomId, onBack, onRoomCreated, onMessageSen
         }
 
         // Notify parent to refresh sidebar when new message arrives
-        if (onMessageSent) {
-          onMessageSent();
-        }
+        // if (onMessageSent) {
+        //   onMessageSent();
+        // }
       });
 
       // Subscribe to error messages
@@ -469,9 +468,9 @@ export default function ChatWindow({ roomId, onBack, onRoomCreated, onMessageSen
       setChatRoom(room);
       
       // Notify parent about room creation if this is a new room
-      if (onRoomCreated) {
-        onRoomCreated(room.id);
-      }
+      // if (onRoomCreated) {
+      //   onRoomCreated(room.id);
+      // }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Failed to load chat room';
       setError(errorMessage);
@@ -500,6 +499,13 @@ export default function ChatWindow({ roomId, onBack, onRoomCreated, onMessageSen
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
+  const handleKeyPress = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendMessage();
+    }
+  };
+
   const sendMessage = async () => {
     if (!newMessage.trim() || sending || !user || !wsConnected) return;
 
@@ -508,12 +514,30 @@ export default function ChatWindow({ roomId, onBack, onRoomCreated, onMessageSen
 
     try {
       setSending(true);
-      wsService.current.sendTextMessage(roomId, messageContent);
+      // wsService.current.sendTextMessage(roomId, messageContent);
       
-      // Notify parent to refresh sidebar
-      if (onMessageSent) {
-        onMessageSent();
+      // Check if message contains only image URL(s)
+      const urls = extractUrls(messageContent);
+      const imageUrls = urls.filter(url => isImageUrl(url));
+      const isOnlyImageUrl = imageUrls.length > 0 && 
+                            messageContent === imageUrls.join(' ');
+      
+      // If message is only image URL(s), send as image message
+      if (isOnlyImageUrl) {
+        console.log(`[ChatWindow] Detected image URL(s), sending via sendImageFromUrl`);
+        // Send first image URL (you can modify to handle multiple)
+        wsService.current.sendImageFromUrl(roomId, imageUrls[0]);
+      } else {
+        // Send as regular text message (backend will extract URLs)
+        wsService.current.sendTextMessage(roomId, messageContent);
       }
+      
+      console.log(`[ChatWindow] ✅ Message sent successfully`);
+
+      // Notify parent to refresh sidebar
+      // if (onMessageSent) {
+      //   onMessageSent();
+      // }
     } catch (error) {
       console.error('Failed to send message:', error);
       setNewMessage(messageContent);
@@ -523,11 +547,19 @@ export default function ChatWindow({ roomId, onBack, onRoomCreated, onMessageSen
     }
   };
 
-  const handleKeyPress = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      sendMessage();
-    }
+  // Helper function to extract URLs from text
+  const extractUrls = (text: string): string[] => {
+    const urlPattern = /\b(https?:\/\/[\w\-._~:\/?#\[\]@!$&'()*+,;=%]+)\b/gi;
+    const matches = text.match(urlPattern);
+    return matches || [];
+  };
+
+  // Helper function to check if URL is an image
+  const isImageUrl = (url: string): boolean => {
+    const lowerUrl = url.toLowerCase();
+    return /\.(jpg|jpeg|png|gif|bmp|webp|svg)(\?.*)?$/i.test(lowerUrl) ||
+          lowerUrl.includes('/images/') ||
+          (lowerUrl.includes('image') && lowerUrl.includes('cdn'));
   };
 
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -539,9 +571,9 @@ export default function ChatWindow({ roomId, onBack, onRoomCreated, onMessageSen
       await wsService.current.sendImageMessage(roomId, file);
       
       // Notify parent to refresh sidebar
-      if (onMessageSent) {
-        onMessageSent();
-      }
+      // if (onMessageSent) {
+      //   onMessageSent();
+      // }
     } catch (error) {
       console.error('Failed to send image:', error);
       setError(error instanceof Error ? error.message : 'Failed to send image');
@@ -551,6 +583,25 @@ export default function ChatWindow({ roomId, onBack, onRoomCreated, onMessageSen
         fileInputRef.current.value = '';
       }
     }
+  };
+
+  // Function to handle GET different URL formats
+  const getImageUrl = (url: string): string => {
+    // console.log('Getting image URL for:', url);
+
+    // If URL is already absolute (starts with http), use it as-is
+    if (url.startsWith('http://') || url.startsWith('https://')) {
+      return url;
+    }
+    
+    // If URL starts with /api, prepend the API base URL
+    if (url.startsWith('/api')) {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080';
+      return `${apiUrl}${url}`;
+    }
+    
+    // Otherwise, return as-is
+    return url;
   };
 
   const handleRoomUpdated = (updatedRoom: ChatRoomDTO) => {
@@ -642,6 +693,167 @@ export default function ChatWindow({ roomId, onBack, onRoomCreated, onMessageSen
     );
   };
 
+  // const renderMessage = (message: ChatMessageDTO) => {
+  //   const isOwn = message.senderId === user?.id;
+  //   const showSender = !isOwn && chatRoom?.type !== EnumRoomType.PERSONAL;
+
+  //   if (message.type === EnumMessageType.SYSTEM) {
+  //     return (
+  //       <div key={message.id} className="flex justify-center mb-2">
+  //         <div className="bg-gray-100 text-gray-600 text-xs px-3 py-1 rounded-full max-w-xs text-center">
+  //           {message.content}
+  //         </div>
+  //       </div>
+  //     );
+  //   }
+
+  //   // Extract image and other URLs from attachments
+  //   const imageAttachments = message.attachmentUrls?.filter(url => isImageUrl(url)) || [];
+  //   const otherAttachments = message.attachmentUrls?.filter(url => !isImageUrl(url)) || [];
+
+  //   return (
+  //     <div
+  //       key={message.id}
+  //       data-message-id={message.id}
+  //       ref={(el) => { // Add this ref
+  //         if (el && intersectionObserver.current && !isOwn) {
+  //           intersectionObserver.current.observe(el);
+  //         }
+  //       }}
+  //       className={`flex ${isOwn ? 'justify-end' : 'justify-start'} mb-4`}
+  //     >
+  //       {!isOwn && chatRoom?.type !== EnumRoomType.PERSONAL && (
+  //         <div className="flex-shrink-0 mr-3">
+  //           <Image
+  //             alt={message.senderName || "group or channel default avatar"}
+  //             src={message.senderAvatarUrl || `https://ui-avatars.com/api/?name=${encodeURIComponent(message.senderName || message.senderName)}&background=random`}
+  //             width={32}
+  //             height={32}
+  //             className="rounded-full object-cover"
+  //           />
+  //         </div>
+  //       )}
+
+  //       <div
+  //         className={`max-w-xs lg:max-w-md ${
+  //           isOwn
+  //             ? 'bg-blue-500 text-white rounded-l-lg rounded-tr-lg'
+  //             : 'bg-gray-200 text-gray-900 rounded-r-lg rounded-tl-lg'
+  //         } px-4 py-2 shadow-sm`}
+  //       >
+  //         {showSender && (
+  //           <div className="text-xs font-medium mb-1 text-blue-600">
+  //             {message.senderName}
+  //           </div>
+  //         )}
+
+  //         {/* Display image attachments */}
+  //         {imageAttachments.length > 0 && (
+  //           <div className="mb-2">
+  //             {imageAttachments.map((url, index) => {
+  //               const imageUrl = getImageUrl(url);
+  //               return (
+  //                 <div key={index} className="relative mb-2">
+  //                   <Image
+  //                     src={imageUrl}
+  //                     alt={`Image ${index + 1}`}
+  //                     width={300}
+  //                     height={300}
+  //                     className="max-w-full rounded cursor-pointer hover:opacity-90 object-contain"
+  //                     style={{ maxHeight: '300px', width: 'auto' }}
+  //                     onClick={() => window.open(imageUrl, '_blank')}
+  //                     onError={(e) => {
+  //                       console.error(`Failed to load image: ${imageUrl}`);
+  //                       e.currentTarget.src = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjAwIiBoZWlnaHQ9IjIwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMjAwIiBoZWlnaHQ9IjIwMCIgZmlsbD0iI2NjYyIvPjx0ZXh0IHg9IjUwJSIgeT0iNTAlIiBmb250LXNpemU9IjE4IiBmaWxsPSIjNjY2IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBkeT0iLjNlbSI+SW1hZ2UgTm90IEZvdW5kPC90ZXh0Pjwvc3ZnPg==';
+  //                     }}
+  //                   />
+  //                   {/* ✅ Show URL below image */}
+  //                   <a
+  //                     href={imageUrl}
+  //                     target="_blank"
+  //                     rel="noopener noreferrer"
+  //                     className={`text-xs ${isOwn ? 'text-blue-200' : 'text-blue-600'} hover:underline break-all`}
+  //                   >
+  //                     {url}
+  //                   </a>
+  //                 </div>
+  //               );
+  //             })}
+  //           </div>
+  //         )}
+
+  //         {/* ✅ Display other URL attachments */}
+  //         {otherAttachments.length > 0 && (
+  //           <div className="mb-2">
+  //             {otherAttachments.map((url, index) => (
+  //               <div key={index} className="flex items-center space-x-2 mb-1">
+  //                 <PaperClipIcon className="w-4 h-4" />
+  //                 <a
+  //                   href={url}
+  //                   target="_blank"
+  //                   rel="noopener noreferrer"
+  //                   className={`text-sm ${isOwn ? 'text-blue-200' : 'text-blue-600'} hover:underline break-all`}
+  //                 >
+  //                   {url}
+  //                 </a>
+  //               </div>
+  //             ))}
+  //           </div>
+  //         )}
+
+  //         {/* ✅ Display text content (if not "Photo" placeholder) */}
+  //         {message.content && message.content !== "Photo" && (
+  //           <div className="whitespace-pre-wrap break-words">
+  //             {renderContentWithLinks(message.content, isOwn)}
+  //           </div>
+  //         )}
+
+  //         <div className="flex items-center justify-between mt-1">
+  //           <div
+  //             className={`text-xs ${
+  //               isOwn
+  //                 ? 'text-blue-200'
+  //                 : 'text-gray-500'
+  //             }`}
+  //           >
+  //             {formatMessageTime(message.timestamp)}
+  //           </div>
+            
+  //           {isOwn && (
+  //             <div className="ml-2">
+  //               {getMessageStatusIcon(message)}
+  //             </div>
+  //           )}
+  //         </div>
+  //       </div>
+  //     </div>
+  //   );
+  // };
+
+  // // Helper to render content with clickable links
+  // const renderContentWithLinks = (content: string, isOwn: boolean) => {
+  //   const urlPattern = /\b(https?:\/\/[\w\-._~:\/?#\[\]@!$&'()*+,;=%]+)\b/gi;
+  //   const parts = content.split(urlPattern);
+    
+  //   return parts.map((part, index) => {
+  //       if (part.match(urlPattern)) {
+  //         return (
+  //           <a
+  //             key={index}
+  //             href={part}
+  //             target="_blank"
+  //             rel="noopener noreferrer"
+  //             className={`${isOwn ? 'text-blue-200' : 'text-blue-600'} hover:underline break-all`}
+  //           >
+  //             {part}
+  //           </a>
+  //         );
+  //       }
+  //       return <span key={index}>{part}</span>;
+  //     })
+  // };
+
+
   const renderMessage = (message: ChatMessageDTO) => {
     const isOwn = message.senderId === user?.id;
     const showSender = !isOwn && chatRoom?.type !== EnumRoomType.PERSONAL;
@@ -656,11 +868,28 @@ export default function ChatWindow({ roomId, onBack, onRoomCreated, onMessageSen
       );
     }
 
+    // ✅ Extract image and other URLs from attachments
+    const imageAttachments = message.attachmentUrls?.filter(url => isImageUrl(url)) || [];
+    const otherAttachments = message.attachmentUrls?.filter(url => !isImageUrl(url)) || [];
+
+    // ✅ Check if image is from local server (localhost or application domain)
+    const isLocalImage = (url: string): boolean => {
+      const lowerUrl = url.toLowerCase();
+        return lowerUrl.includes('localhost') || 
+              lowerUrl.includes('127.0.0.1') ||
+              lowerUrl.startsWith('/api/') ||
+              (process.env.NEXT_PUBLIC_API_URL ? lowerUrl.includes(process.env.NEXT_PUBLIC_API_URL) : false);
+    };
+
+    // ✅ Check if message is image-only (no text content except "Photo" placeholder)
+    const isImageOnly = message.type === EnumMessageType.IMAGE && 
+                        (!message.content || message.content === "Photo");
+
     return (
       <div
         key={message.id}
         data-message-id={message.id}
-        ref={(el) => { // Add this ref
+        ref={(el) => {
           if (el && intersectionObserver.current && !isOwn) {
             intersectionObserver.current.observe(el);
           }
@@ -670,8 +899,8 @@ export default function ChatWindow({ roomId, onBack, onRoomCreated, onMessageSen
         {!isOwn && chatRoom?.type !== EnumRoomType.PERSONAL && (
           <div className="flex-shrink-0 mr-3">
             <Image
-              alt={message.senderUsername || "group or channel default avatar"}
-              src={message.senderAvatarUrl || `https://ui-avatars.com/api/?name=${encodeURIComponent(message.senderFullName || message.senderUsername)}&background=random`}
+              alt={message.senderName || "avatar"}
+              src={`https://ui-avatars.com/api/?name=${encodeURIComponent(message.senderName || 'User')}&background=random`}
               width={32}
               height={32}
               className="rounded-full object-cover"
@@ -688,58 +917,75 @@ export default function ChatWindow({ roomId, onBack, onRoomCreated, onMessageSen
         >
           {showSender && (
             <div className="text-xs font-medium mb-1 text-blue-600">
-              {message.senderFullName || message.senderUsername}
+              {message.senderName}
             </div>
           )}
 
-          {message.type === EnumMessageType.IMAGE && message.attachmentUrls?.length > 0 ? (
-            <div>
-              {message.attachmentUrls.map((url, index) => (
-                <Image
+          {/* ✅ Display image attachments */}
+          {imageAttachments.length > 0 && (
+            <div className="mb-2">
+              {imageAttachments.map((url, index) => {
+                const imageUrl = getImageUrl(url);
+                const showImageUrl = !isImageOnly && !isLocalImage(url); // Only show URL if not image-only and not local
+                
+                return (
+                  <div key={index} className="relative mb-2">
+                    <Image
+                      src={imageUrl}
+                      alt={`Image ${index + 1}`}
+                      width={300}
+                      height={300}
+                      className="max-w-full rounded cursor-pointer hover:opacity-90 object-contain"
+                      style={{ maxHeight: '300px', width: 'auto' }}
+                      onClick={() => window.open(imageUrl, '_blank')}
+                      onError={(e) => {
+                        console.error(`Failed to load image: ${imageUrl}`);
+                        e.currentTarget.src = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjAwIiBoZWlnaHQ9IjIwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMjAwIiBoZWlnaHQ9IjIwMCIgZmlsbD0iI2NjYyIvPjx0ZXh0IHg9IjUwJSIgeT0iNTAlIiBmb250LXNpemU9IjE4IiBmaWxsPSIjNjY2IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBkeT0iLjNlbSI+SW1hZ2UgTm90IEZvdW5kPC90ZXh0Pjwvc3ZnPg==';
+                      }}
+                    />
+                    
+                    {/* ✅ Only show URL if: 1) Not image-only message, AND 2) Not from local server */}
+                    {showImageUrl && (
+                      <a
+                        href={imageUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className={`text-xs ${isOwn ? 'text-blue-200' : 'text-blue-600'} hover:underline break-all mt-1 inline-block`}
+                      >
+                        {/* {url} */}
+                      </a>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* ✅ Display regular URL attachments (not images) - inline with text */}
+          {otherAttachments.length > 0 && (
+            <div className="mb-2">
+              {otherAttachments.map((url, index) => (
+                <a
                   key={index}
-                  src={url}
-                  alt="Shared image"
-                  width={200}
-                  height={200}
-                  className="max-w-full rounded mb-2 cursor-pointer hover:opacity-90"
-                  onClick={() => window.open(url, '_blank')}
-                />
+                  href={url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className={`${isOwn ? 'text-blue-200' : 'text-blue-600'} hover:underline break-all inline`}
+                >
+                </a>
               ))}
-              {message.content && (
-                <div className="mt-2">{message.content}</div>
-              )}
             </div>
-          ) : message.type === EnumMessageType.FILE && message.attachmentUrls?.length > 0 ? (
-            <div>
-              {message.attachmentUrls.map((url, index) => (
-                <div key={index} className="flex items-center space-x-2 mb-2">
-                  <PaperClipIcon className="w-4 h-4" />
-                  <a
-                    href={url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-blue-300 hover:text-blue-100 underline text-sm"
-                  >
-                    File {index + 1}
-                  </a>
-                </div>
-              ))}
-              {message.content && (
-                <div className="mt-2">{message.content}</div>
-              )}
+          )}
+
+          {/* ✅ Display text content (if exists and not just "Photo" placeholder) */}
+          {message.content && message.content !== "Photo" && (
+            <div className="whitespace-pre-wrap break-words">
+              {renderContentWithLinks(message.content, isOwn)}
             </div>
-          ) : (
-            <div className="whitespace-pre-wrap">{message.content}</div>
           )}
 
           <div className="flex items-center justify-between mt-1">
-            <div
-              className={`text-xs ${
-                isOwn
-                  ? 'text-blue-200'
-                  : 'text-gray-500'
-              }`}
-            >
+            <div className={`text-xs ${isOwn ? 'text-blue-200' : 'text-gray-500'}`}>
               {formatMessageTime(message.timestamp)}
             </div>
             
@@ -753,6 +999,30 @@ export default function ChatWindow({ roomId, onBack, onRoomCreated, onMessageSen
       </div>
     );
   };
+
+  // ✅ Helper to render content with clickable links (for text with embedded URLs)
+  const renderContentWithLinks = (content: string, isOwn: boolean) => {
+    const urlPattern = /\b(https?:\/\/[\w\-._~:\/?#\[\]@!$&'()*+,;=%]+)\b/gi;
+    const parts = content.split(urlPattern);
+    
+    return parts.map((part, index) => {
+      if (part.match(urlPattern)) {
+        return (
+          <a
+            key={index}
+            href={part}
+            target="_blank"
+            rel="noopener noreferrer"
+            className={`${isOwn ? 'text-blue-200 underline' : 'text-blue-600 underline'} hover:opacity-80 break-all`}
+          >
+            {part}
+          </a>
+        );
+      }
+      return <span key={index}>{part}</span>;
+    });
+  };
+
 
   // Handle User Status Online/Offline Indicator
 

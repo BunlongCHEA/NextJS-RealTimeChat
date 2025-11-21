@@ -102,8 +102,8 @@ export interface ChatMessageDTO {
   id: number;
   chatRoomId: number;
   senderId: number;
-  senderUsername: string;
-  senderFullName: string;
+  senderName: string;
+  // senderFullName: string;
   senderAvatarUrl?: string;
   content: string;
   type: EnumMessageType;

@@ -191,8 +191,25 @@ export class WebSocketService {
       const subscription = this.stompClient.subscribe(topic, (message: IMessage) => {
         try {
           const notification = JSON.parse(message.body);
+
+          // // Handle full DTO format
+          // const data = JSON.parse(message.body);         
+          // let notification: ChatMessageDTO;
+          // if (data.id && data.chatRoomId && data.senderId && data.type) {
+          //   notification = {
+          //     id: data.id,
+          //     chatRoomId: data.chatRoomId,
+          //     senderId: data.senderId,
+          //     senderName: data.senderName || 'Unknown',
+          //     content: data.content || (data.type === 'IMAGE' ? 'Photo' : ''),
+          //     type: data.type,
+          //     timestamp: data.timestamp,
+          //     attachmentUrls: data.attachmentUrls || []
+          //   };
+          // }
+
           onUpdate(notification);
-          console.log('Received global message notification:', notification);
+          console.log('Received global message notification:', JSON.stringify(notification, null, 2));
         } catch (error) {
           console.error('Error parsing global message notification:', error);
         }
@@ -547,7 +564,7 @@ export class WebSocketService {
         return;
       }
 
-      const maxSize = 5 * 1024 * 1024; // 5MB
+      const maxSize = 10 * 1024 * 1024; // 10MB
       if (imageFile.size > maxSize) {
         reject(new Error('Image file too large. Maximum size is 5MB.'));
         return;
