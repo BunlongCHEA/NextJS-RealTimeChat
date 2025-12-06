@@ -13,6 +13,7 @@ import {
   CreatePersonalChatRequest
 } from "@/types/chat";
 import { AuthResponse, LoginRequest, RegisterRequest, User } from "@/types/user";
+import { FcmTokenResponse } from "@/types/firebase";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'https://chatspringboot.bunlong.site/api';
 
@@ -370,6 +371,32 @@ export class ApiService {
 
     return this.request<MessageStatus>(`/message-status/user/message?${params}`);
   }
+
+
+  // FCM Token Management
+  // Register FCM token with server
+  static async registerFcmToken(token: string, deviceType: 'WEB' | 'ANDROID' | 'IOS' = 'WEB'): Promise<FcmTokenResponse> {
+    return this.request<FcmTokenResponse>('/fcm-tokens/register', {
+      method: 'POST',
+      body: JSON.stringify({ token, deviceType }),
+    });
+  }
+
+  // Unregister FCM token from server
+  static async unregisterFcmToken(token: string): Promise<FcmTokenResponse> {
+    return this.request<FcmTokenResponse>('/fcm-tokens/unregister', {
+      method: 'DELETE',
+      body: JSON.stringify({ token }),
+    });
+  }
+
+  // Unregister all FCM tokens for current user
+  static async unregisterAllFcmTokens(): Promise<FcmTokenResponse> {
+    return this.request<FcmTokenResponse>('/fcm-tokens/unregister-all', {
+      method: 'DELETE',
+    });
+  }
+
 
 
   // Helper methods for frontend

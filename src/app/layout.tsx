@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { AuthProvider } from "@/hooks/useAuth";
 import { Analytics } from "@vercel/analytics/next";
+import NotificationPermissionBlocked from "@/components/firebase/NotificationPermissionBlocked";
 // import { WebSocketProvider } from "@/lib/WebSocketContext";
 
 const geistSans = Geist({
@@ -34,6 +35,9 @@ export default function RootLayout({
           {/* <WebSocketProvider> */}
             {children}
             <Analytics />
+
+            {/* ✅ Show notification blocked warning globally */}
+            <NotificationPermissionBlocked />
           {/* </WebSocketProvider> */}
         </AuthProvider>
       </body>

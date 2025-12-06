@@ -45,6 +45,9 @@ import {
 import CreateGroupModal from './CreateGroupModal';
 import CreateChannelModal from './CreateChannelModal';
 import Image from 'next/image';
+import { PushNotificationPayload } from '@/types/firebase';
+import { usePushNotifications } from '@/hooks/usePushNotifications';
+import NotificationSettings from '../firebase/NotificationSettings';
 
 interface ChatSidebarProps {
   selectedRoomId?: number;
@@ -99,7 +102,11 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
   const onlineStatusTimeout = useRef<NodeJS.Timeout | null>(null);
   const mountedRef = useRef(false);
 
+  // Add state for unread counts
   const [unreadCounts, setUnreadCounts] = useState<Map<number, number>>(new Map());
+
+  // Add state for settings modal for notification
+  const [showSettings, setShowSettings] = useState(false);
 
   useEffect(() => {
     if (user && token) {
@@ -187,80 +194,6 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
       return () => clearInterval(refreshInterval);
     }
   }, [wsConnected, user]);
-
-  // // Track selected room for read status updates
-  // useEffect(() => {
-  //   if (selectedRoomId && user) {
-  //     // Clear unread count for selected room
-  //     // setUnreadCounts(prev => {
-  //     //   const newCounts = new Map(prev);
-  //     //   newCounts.delete(selectedRoomId);
-  //     //   return newCounts;
-  //     // });
-
-  //     setUnreadCounts(prev => {
-  //       const newCounts = new Map(prev);
-  //       const hadUnread = newCounts.has(selectedRoomId);
-  //       if (hadUnread) {
-  //         console.log(`[ChatSidebar] Clearing unread badge for room ${selectedRoomId}`);
-  //       }
-  //       newCounts.delete(selectedRoomId);
-  //       return newCounts;
-  //     });
-
-  //     // When a room is selected, we could mark messages as read
-  //     // This would typically be handled by the ChatWindow component
-  //     // but we can also track room selection here
-  //     // handleRoomSelection(selectedRoomId);
-  //     handleRoomClick(selectedRoomId);
-  //   }
-  // }, [selectedRoomId, user]);
-
-
-
-  // Add this new effect after the user status subscription effect
-  // useEffect(() => {
-  //   if (!wsConnected || !chatRooms.length || !user) return;
-
-  //   console.log(`[ChatSidebar] Setting up message status subscriptions for ${chatRooms.length} rooms`);
-
-  //   // Subscribe to message status updates for each room
-  //   chatRooms.forEach(room => {
-  //     wsService.current.subscribeToUserOrMessageStatus(
-  //       room.id,
-  //       (update: UserStatusUpdate | MessageStatusUpdate) => {
-  //         // Only handle message status updates
-  //         if ('type' in update && update.type === 'MESSAGE_STATUS_UPDATE') {
-  //           const msgUpdate = update as MessageStatusUpdate;
-            
-  //           // If current user marked a message as READ, clear unread count
-  //           if (msgUpdate.status === EnumStatus.READ && msgUpdate.userId === user.id) {
-  //             console.log(`[ChatSidebar] User ${user.username} marked message ${msgUpdate.messageId} as READ in room ${room.id}`);
-              
-  //             setUnreadCounts(prev => {
-  //               const newCounts = new Map(prev);
-  //               const hadUnread = newCounts.has(room.id);
-                
-  //               if (hadUnread) {
-  //                 console.log(`[ChatSidebar] Clearing unread badge for room ${room.id}`);
-  //                 newCounts.delete(room.id);
-  //               }
-                
-  //               return newCounts;
-  //             });
-  //           }
-  //         }
-  //       }
-  //     );
-  //   });
-
-  //   return () => {
-  //     console.log(`[ChatSidebar] Cleaning up message status subscriptions`);
-  //     // Cleanup is handled by WebSocketService
-  //   };
-  // }, [wsConnected, chatRooms, user]);
-
-
 
   // Debouncing effect for search query
   useEffect(() => {
@@ -387,6 +320,45 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
       });
     };
   }, [wsConnected, chatRooms, user, selectedRoomId]); 
+
+
+  // Push Notification Handling
+
+  // Handle push notification received
+  const handleNotificationReceived = useCallback((payload: PushNotificationPayload) => {
+    console.log('📬 Received push notification:', payload);
+
+    if (payload.data?.type === 'NEW_MESSAGE') {
+      const chatRoomId = parseInt(payload.data.chatRoomId, 10);
+
+      // Update unread count if not in the same room
+      if (chatRoomId !== selectedRoomId) {
+        setUnreadCounts((prev) => {
+          const newCounts = new Map(prev);
+          const currentCount = newCounts.get(chatRoomId) || 0;
+          newCounts.set(chatRoomId, currentCount + 1);
+          return newCounts;
+        });
+      }
+
+      // Refresh chat rooms list
+      loadChatRooms(false);
+    }
+  }, [selectedRoomId]);
+
+  // Initialize push notifications
+  const { isEnabled, isSupported } = usePushNotifications({
+    autoInitialize: true,
+    onNotificationReceived: handleNotificationReceived,
+    currentChatRoomId: selectedRoomId, // Pass current room ID
+  });
+
+  // Log notification status
+  useEffect(() => {
+    if (isSupported) {
+      console.log(`🔔 Push notifications: ${isEnabled ? 'enabled' : 'disabled'}`);
+    }
+  }, [isSupported, isEnabled]);  
 
 
   // Handle Message Statuses
@@ -1089,6 +1061,16 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
       {/* Header */}
       <div className="p-4 border-b border-gray-200 bg-white">
         <div className="flex items-center justify-between mb-4">
+          {/* Settings Button */}
+          <button
+            onClick={() => setShowSettings(! showSettings)}
+            className="p-2 hover:bg-gray-100 rounded-lg transition"
+            aria-label="Notification Settings"
+          >
+            <Cog6ToothIcon className="w-5 h-5 text-gray-600" />
+          </button>
+
+
           {/* Hamburger Menu */}
           <div className="relative">
             <button
@@ -1257,6 +1239,16 @@ export default function ChatSidebar({ selectedRoomId, onRoomSelect }: ChatSideba
           </div>
         )}
       </div>
+
+      {/* Settings Panel */}
+      {showSettings && (
+        <div className="p-4 border-b border-gray-200 bg-gray-50">
+          <NotificationSettings 
+            onNotificationReceived={handleNotificationReceived}
+            className="mb-0"
+          />
+        </div>
+      )}
 
       {/* Content List */}
       <div className="flex-1 overflow-y-auto">

@@ -53,6 +53,15 @@ npm install @stomp/stompjs sockjs-client
 ```
 @stomp/stompjs is the STOMP client library, and sockjs-client is often used as a fallback for WebSocket connections in older browsers or environments that might not natively support WebSockets.
 
+```bash
+npm install firebase
+```
+Firebase provides a variety of integrated services for app development. Key features include Authentication, Databases, Cloud Storage, Cloud Message (FCM as we used in this SpringBoot Project), Hosting, Crashlytics, Performance Monitoring, etc.
+
+```bash
+npm install -g firebase-tools
+```
+firebase-tools is necessary to access the Firebase Command Line Interface (CLI) from any directory on your computer. The CLI is a powerful tool used to manage, test, and deploy your Firebase projects from your local machine.
 
 ```bash
 npm install @vercel/analytics
