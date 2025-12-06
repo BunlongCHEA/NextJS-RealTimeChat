@@ -2,8 +2,21 @@ This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-
 
 ## Getting Started
 
-First, run the development server:
+First, need to install all neccessary package.json
+```bash
+npm install
+```
 
+Then, For this project require to execute this command:
+```bash
+# Generate the service worker
+npm run generate-sw
+
+# Check the output
+cat public/firebase-messaging-sw.js
+```
+
+Lastly, run the development server:
 ```bash
 npm run dev
 # or
@@ -72,18 +85,6 @@ This provides several key benefits:
 - Configuration Management: It allows you to manage configuration settings (e.g., port numbers, logging levels, database URLs) in a centralized location, separate from your code.
 - Environment-Specific Settings: You can easily use different configurations for different environments (development, testing, production) without changing your application's code. 
 In essence, dotenv is a simple tool that promotes a best practice of separating configuration from code, making your application more flexible, maintainable, and secure during development. 
-
-For this project require to execute this command:
-```bash
-# Generate the service worker
-npm run generate-sw
-
-# Check the output
-cat public/firebase-messaging-sw.js
-
-# Run development
-npm run dev
-```
 
 ```bash
 npm install @vercel/analytics
