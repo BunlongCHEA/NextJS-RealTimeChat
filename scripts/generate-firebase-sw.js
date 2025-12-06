@@ -1,18 +1,37 @@
-// Firebase Messaging Service Worker
+import { existsSync, mkdirSync, writeFileSync } from 'fs';
+import { join } from 'path';
+import { config } from 'dotenv';
+import { fileURLToPath } from 'url';
+import { dirname } from 'path';
+
+// Get __dirname equivalent in ES modules
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
+// Check if running in production or development
+const isDevelopment = process.env.NODE_ENV !== 'production';
+
+// Load environment variables
+config({ 
+  path: isDevelopment ?  '.env.local' : '.env.production' 
+});
+
+// Use string concatenation instead of nested template literals
+const swTemplate = `// Firebase Messaging Service Worker
 // Auto-generated - DO NOT EDIT MANUALLY
-// Generated at: 2025-12-06T18:26:55.106Z
+// Generated at: ${new Date().toISOString()}
 
 importScripts('https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js');
 importScripts('https://www.gstatic.com/firebasejs/9.22.0/firebase-messaging-compat.js');
 
 // Firebase configuration
 const firebaseConfig = {
-  apiKey: "AIzaSyC3SZrnER1MKBzppAU0rGPP6_Q0kMTELbs",
-  authDomain: "bunlong-22f66.firebaseapp.com",
-  projectId: "bunlong-22f66",
-  storageBucket: "bunlong-22f66.firebasestorage.app",
-  messagingSenderId: "326843919188",
-  appId: "1:326843919188:web:4286be6ee49c536f1076c1"
+  apiKey: "${process.env.NEXT_PUBLIC_FIREBASE_API_KEY || ''}",
+  authDomain: "${process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN || ''}",
+  projectId: "${process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID || ''}",
+  storageBucket: "${process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET || ''}",
+  messagingSenderId: "${process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID || ''}",
+  appId: "${process.env.NEXT_PUBLIC_FIREBASE_APP_ID || ''}"
 };
 
 // Validate config before initializing
@@ -95,3 +114,18 @@ if (!firebaseConfig.apiKey || !firebaseConfig.projectId) {
     console.log('[firebase-messaging-sw.js] Notification closed:', event);
   });
 }
+`;
+
+// Ensure public directory exists
+const publicDir = join(process.cwd(), 'public');
+if (!existsSync(publicDir)) {
+  mkdirSync(publicDir, { recursive: true });
+}
+
+// Write the service worker file
+const outputPath = join(publicDir, 'firebase-messaging-sw.js');
+writeFileSync(outputPath, swTemplate);
+
+console.log('Firebase service worker generated at:', outputPath);
+console.log(`   Environment: ${isDevelopment ? 'development' : 'production'}`);
+console.log(`   Project ID: ${process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID || 'NOT SET'}`);

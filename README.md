@@ -64,6 +64,28 @@ npm install -g firebase-tools
 firebase-tools is necessary to access the Firebase Command Line Interface (CLI) from any directory on your computer. The CLI is a powerful tool used to manage, test, and deploy your Firebase projects from your local machine.
 
 ```bash
+npm install --save-dev dotenv
+```
+The dotenv npm package is used to load environment variables from a local .env file into your Node.js application's runtime (specifically, into process.env). 
+This provides several key benefits:
+- Security: It prevents you from hardcoding sensitive data like API keys, database credentials, and passwords directly into your source code. By adding the .env file to your .gitignore file, you ensure these secrets are not accidentally exposed in your version control system (like GitHub).
+- Configuration Management: It allows you to manage configuration settings (e.g., port numbers, logging levels, database URLs) in a centralized location, separate from your code.
+- Environment-Specific Settings: You can easily use different configurations for different environments (development, testing, production) without changing your application's code. 
+In essence, dotenv is a simple tool that promotes a best practice of separating configuration from code, making your application more flexible, maintainable, and secure during development. 
+
+For this project require to execute this command:
+```bash
+# Generate the service worker
+npm run generate-sw
+
+# Check the output
+cat public/firebase-messaging-sw.js
+
+# Run development
+npm run dev
+```
+
+```bash
 npm install @vercel/analytics
 ```
 @vercel/analytics allows Vercel Web Analytics to automatically track page views and provide insights into your website's performance and traffic within your Vercel Dashboard. Note that analytics data is not tracked in development mode.
